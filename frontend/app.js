@@ -279,12 +279,19 @@ document.addEventListener("DOMContentLoaded", () => {
           method: "POST",
           body: formData,
         });
-        const result = await res.json();
+        const contentType = res.headers.get("content-type") || "";
+        let result;
+        if (contentType.includes("application/json")) {
+          result = await res.json();
+        } else {
+          const rawText = await res.text();
+          throw new Error(`Server returned HTTP ${res.status}: ${rawText.slice(0, 120)}`);
+        }
         if (!res.ok) {
           alert(`Error uploading ${file.name}: ${result.detail || "Upload failed"}`);
         }
       } catch (err) {
-        alert(`Failed to upload ${file.name}: ${err}`);
+        alert(`Failed to upload ${file.name}: ${err.message || err}`);
       }
     }
 
