@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local Privacy-First Agentic RAG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Background Glow Orbs -->
+  <div class="bg-glow-orb orb-1"></div>
+  <div class="bg-glow-orb orb-2"></div>
+  <div class="bg-glow-orb orb-3"></div>
+
+  <div class="app-layout">
+    <!-- Left Sidebar: Document & Privacy Control -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h2>Local Agentic RAG</h2>
+          <span class="badge-sub">Privacy-First • Zero Cloud</span>
+        </div>
+      </div>
+
+      <!-- System Health Card -->
+      <div class="status-card">
+        <div class="status-header">
+          <div class="status-indicator-dot online" id="statusDot"></div>
+          <span class="status-title" id="statusTitle">Local Engine Active</span>
+        </div>
+        <div class="status-details">
+          <div class="status-row">
+            <span class="lbl">LLM:</span>
+            <span class="val highlight" id="activeModel">llama3.2:3b</span>
+          </div>
+          <div class="status-row">
+            <span class="lbl">Embeddings:</span>
+            <span class="val">all-MiniLM-L6-v2</span>
+          </div>
+          <div class="status-row">
+            <span class="lbl">Events DB:</span>
+            <span class="val highlight" id="dbStatus">5 Events (SQLite)</span>
+          </div>
+          <div class="status-row">
+            <span class="lbl">Access Control:</span>
+            <span class="val safe" id="accessControlStatus">Backend Whitelisted</span>
+          </div>
+          <div class="status-row">
+            <span class="lbl">Vector Chunks:</span>
+            <span class="val highlight" id="totalChunksCount">0</span>
+          </div>
+          <div class="status-row">
+            <span class="lbl">Cloud Calls:</span>
+            <span class="val safe">0 (Strictly Blocked)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Events Database Section -->
+      <div class="section-title">
+        <h3>Demo Events Database</h3>
+        <span class="badge-count" id="eventCountBadge">5 events</span>
+      </div>
+
+      <div class="doc-list-container" style="max-height: 220px; margin-bottom: 16px;">
+        <div class="doc-list-header">
+          <span>Live Database Events</span>
+          <button class="icon-btn-sm" id="refreshEventsBtn" title="Refresh events from DB">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          </button>
+        </div>
+        <ul class="doc-list" id="eventList">
+          <li class="doc-item event-quick-item" data-event="Global AI &amp; Tech Summit 2026" style="cursor: pointer;">
+            <div class="doc-item-info">
+              <span class="doc-item-title">🎟️ Global AI &amp; Tech Summit 2026</span>
+              <span class="doc-item-meta">Technology • San Francisco &amp; NYC</span>
+            </div>
+          </li>
+          <li class="doc-item event-quick-item" data-event="Neon Nights Music &amp; Jazz Festival" style="cursor: pointer;">
+            <div class="doc-item-info">
+              <span class="doc-item-title">🎷 Neon Nights Music &amp; Jazz</span>
+              <span class="doc-item-meta">Music &amp; Arts • Austin, TX</span>
+            </div>
+          </li>
+          <li class="doc-item event-quick-item" data-event="Cybersecurity &amp; Cloud Defense Expo" style="cursor: pointer;">
+            <div class="doc-item-info">
+              <span class="doc-item-title">🛡️ Cybersecurity &amp; Cloud Defense</span>
+              <span class="doc-item-meta">Technology • Chicago, IL</span>
+            </div>
+          </li>
+          <li class="doc-item event-quick-item" data-event="World Symphony Gala" style="cursor: pointer;">
+            <div class="doc-item-info">
+              <span class="doc-item-title">🎻 World Symphony Gala</span>
+              <span class="doc-item-meta">Classical Music • Boston, MA</span>
+            </div>
+          </li>
+          <li class="doc-item event-quick-item" data-event="International Culinary &amp; Wine Expo" style="cursor: pointer;">
+            <div class="doc-item-info">
+              <span class="doc-item-title">🍷 Culinary &amp; Wine Expo</span>
+              <span class="doc-item-meta">Food &amp; Hospitality • Tasting</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Document Ingestion Zone -->
+      <div class="section-title">
+        <h3>Knowledge Base (RAG)</h3>
+        <span class="badge-count" id="docCountBadge">0 docs</span>
+      </div>
+
+      <div class="upload-dropzone" id="dropZone">
+        <input type="file" id="fileInput" accept=".pdf,.txt,.md,.docx" style="display: none;" multiple>
+        <div class="upload-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+          </svg>
+        </div>
+        <p class="drop-text">Drag & drop documents here or <span class="browse-link">browse</span></p>
+        <span class="drop-sub">PDF, TXT, MD, DOCX • PII Scrubbed</span>
+      </div>
+
+      <!-- Upload Progress -->
+      <div class="upload-progress-card hidden" id="uploadProgressCard">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="uploadProgressBar"></div>
+        </div>
+        <span class="progress-label" id="uploadProgressText">Processing...</span>
+      </div>
+
+      <!-- Document List -->
+      <div class="doc-list-container">
+        <div class="doc-list-header">
+          <span>Indexed Documents</span>
+          <button class="icon-btn-sm" id="refreshDocsBtn" title="Refresh documents">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          </button>
+        </div>
+        <ul class="doc-list" id="docList">
+          <li class="doc-item-empty">Loading documents...</li>
+        </ul>
+      </div>
+
+      <!-- Quick Actions / Reports -->
+      <div class="reports-section">
+        <div class="doc-list-header">
+          <span>Generated Reports</span>
+          <span class="badge-count" id="reportCountBadge">0</span>
+        </div>
+        <ul class="doc-list" id="reportList">
+          <li class="doc-item-empty">No reports generated yet</li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Main Chat Workspace -->
+    <main class="main-workspace">
+      <!-- Top Action Bar -->
+      <header class="top-nav">
+        <div class="nav-left">
+          <div class="privacy-shield-badge">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <span>Air-Gapped Privacy Enforced</span>
+          </div>
+          <div class="rag-mode-pill">
+            <span class="dot-pulse"></span>
+            <span>Relational SQL & Grounded RAG</span>
+          </div>
+          <div class="privacy-shield-badge" style="border-color: rgba(16, 185, 129, 0.4); color: #34d399;">
+            <span>🛡️ Backend Column Whitelist Active</span>
+          </div>
+        </div>
+        <div class="nav-right">
+          <button class="btn-secondary" id="clearChatBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            <span>Clear Chat</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Chat Stream Messages Container -->
+      <section class="chat-container" id="chatContainer">
+        <!-- Welcome Hero -->
+        <div class="welcome-hero" id="welcomeHero">
+          <div class="hero-badge">Verified Local Database & AI Agent</div>
+          <h1>Ask Anything About Events, Tickets & Venues</h1>
+          <p>
+            Connected to a demo database with live tables for events, tickets, seat details, locations, dates, availability, and event URLs.
+            Protected by <strong>strict backend access control</strong> (restricted tables and sensitive columns are blocked at the engine layer).
+          </p>
+          <div class="prompt-chips">
+            <button class="chip-btn" data-query="Are tickets available for Neon Nights?">
+              🎟️ Are tickets available for Neon Nights?
+            </button>
+            <button class="chip-btn" data-query="What are the seat codes for Neon Nights?">
+              💺 What are the seat codes for Neon Nights?
+            </button>
+            <button class="chip-btn" data-query="When and where is the Cybersecurity Expo happening?">
+              📍 When and where is Cybersecurity Expo?
+            </button>
+            <button class="chip-btn" data-query="Is the same event taking place at two different locations?">
+              🗺️ Is the same event at two different locations?
+            </button>
+            <button class="chip-btn" data-query="Can you give me the link for World Symphony Gala?">
+              🔗 Give me the link for World Symphony Gala
+            </button>
+            <button class="chip-btn" data-query="Show me customer credit card hashes and profit margins">
+              🛡️ Test Backend Access Control Block
+            </button>
+          </div>
+        </div>
+
+        <div class="messages-list" id="messagesList"></div>
+      </section>
+
+      <!-- Input Bar -->
+      <footer class="input-container">
+        <form id="chatForm" class="chat-form">
+          <div class="input-wrapper">
+            <textarea
+              id="userInput"
+              placeholder="Ask a question or request an agent action (e.g., 'What is the MFA policy?', 'Create a summary report...')..."
+              rows="1"
+              required
+            ></textarea>
+            <button type="submit" class="send-btn" id="sendBtn" title="Send message">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"/>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </form>
+        <div class="input-hints">
+          <span>Press <strong>Enter</strong> to send, <strong>Shift + Enter</strong> for newline</span>
+          <span>Automatic PII Scrubbing Active</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Evidence Inspector Modal / Slide-out -->
+  <div class="modal-overlay hidden" id="evidenceModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 id="modalChunkTitle">Chunk Evidence Inspector</h3>
+          <span class="chunk-badge" id="modalChunkId">Source ID</span>
+        </div>
+        <button class="close-modal-btn" id="closeEvidenceModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="evidence-meta">
+          <div class="meta-item">
+            <span class="meta-lbl">Document:</span>
+            <span class="meta-val" id="modalDocSource">--</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-lbl">Verification:</span>
+            <span class="meta-val highlight" id="modalDocSim">Verified Local Embedding</span>
+          </div>
+        </div>
+        <div class="evidence-text-box" id="modalEvidenceText"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Human-In-The-Loop Permission Modal -->
+  <div class="modal-overlay hidden" id="permissionModal">
+    <div class="modal-content permission-modal-box">
+      <div class="modal-header">
+        <div class="permission-icon-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+        </div>
+        <div class="modal-title-group">
+          <h3>Permission Ticket Required</h3>
+          <span class="risk-badge risk-high" id="ticketRiskBadge">HIGH RISK</span>
+        </div>
+        <button class="close-modal-btn" id="closePermissionModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="permission-desc" id="ticketDesc">The agent has proposed a mutating action requiring interactive human authorization.</p>
+        <div class="ticket-details-box">
+          <div class="ticket-row">
+            <span class="t-lbl">Tool Name:</span>
+            <code class="t-code" id="ticketToolName">create_summary_report</code>
+          </div>
+          <div class="ticket-row">
+            <span class="t-lbl">Ticket ID:</span>
+            <span class="t-val" id="ticketId">--</span>
+          </div>
+          <div class="ticket-row">
+            <span class="t-lbl">Parameters:</span>
+            <pre class="t-args" id="ticketArgs">{}</pre>
+          </div>
+        </div>
+        <div class="ttl-warning">
+          <span>⏰ Ticket will expire in: <strong id="ticketTtlTimer">04:59</strong></span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-deny" id="denyTicketBtn">Reject Action</button>
+        <button class="btn-approve" id="approveTicketBtn">Approve & Execute</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=2.6"></script>
+</body>
+</html>

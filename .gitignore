@@ -1,0 +1,29 @@
+# Python byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Chroma vector database data (can be generated via ingest_samples.py)
+data/chroma_data/
+
+# SQLite databases
+# data/events.db can be included or re-generated via init_event_db.py
+
+# Operating system / IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.log
+
+# Sensitive environment variables
+.env
+.env.local
