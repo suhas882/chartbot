@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -56,6 +56,25 @@ class ApprovalRequest(BaseModel):
     ticket_id: str
     action: str  # "approve" or "reject"
 
+class CreateEventRequest(BaseModel):
+    name: str
+    category: str = "Technology"
+    description: str = ""
+    organizer: str = "Event Management"
+    venue_name: str
+    city: str
+    state: str = ""
+    address: str = ""
+    event_date: str # YYYY-MM-DD
+    start_time: str = "09:00 AM"
+    end_time: str = "05:00 PM"
+    doors_open: str = "08:00 AM"
+    capacity: int = 5000
+    ticket_tiers: Optional[List[Dict[str, Any]]] = None
+    booking_url: Optional[str] = None
+    official_url: Optional[str] = None
+    seat_prefix: Optional[str] = None
+
 @app.get("/api/health")
 def get_health() -> Dict[str, Any]:
     ollama_info = llm_client.check_ollama_status()
@@ -107,6 +126,34 @@ def list_events() -> List[Dict[str, Any]]:
         "SELECT event_id, name, category, description, organizer FROM events ORDER BY event_id"
     )
     return res.get("data", [])
+
+@app.post("/api/events/create")
+def create_event_endpoint(req: CreateEventRequest) -> Dict[str, Any]:
+    """Administrative endpoint to register a new event across all 7 relational tables."""
+    try:
+        from add_event import add_new_event
+        res = add_new_event(
+            name=req.name,
+            category=req.category,
+            description=req.description,
+            organizer=req.organizer,
+            venue_name=req.venue_name,
+            city=req.city,
+            state=req.state,
+            address=req.address,
+            event_date=req.event_date,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            doors_open=req.doors_open,
+            capacity=req.capacity,
+            ticket_tiers=req.ticket_tiers,
+            booking_url=req.booking_url,
+            official_url=req.official_url,
+            seat_prefix=req.seat_prefix
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/database/schema")
 def get_database_schema() -> Dict[str, Any]:

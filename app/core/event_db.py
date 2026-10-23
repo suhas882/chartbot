@@ -32,8 +32,8 @@ class EventDatabaseEngine:
         q_lower = query.lower()
 
         restricted_patterns = [
-            ("customer bookings or personal details", r"\b(customer|booking|credit card|card number|cvv|billing address|buyer)\b"),
-            ("internal company profit & costs", r"\b(profit margin|production cost|internal cost|net profit|revenue|markup rate|markup)\b"),
+            ("customer bookings or personal details", r"\b(customer|customers|who booked|booking records|booking list|booked by|credit card|card number|cvv|billing address|buyer info|buyer details)\b"),
+            ("internal company profit & costs", r"\b(profit margin|production cost|internal cost|net profit|company revenue|internal markup)\b"),
             ("admin credentials and security secrets", r"\b(admin password|password hash|api secret|alarm code|security pin|pin code|secret key)\b"),
             ("private contact details", r"\b(manager private phone|bank account|bank routing|wire routing)\b")
         ]
@@ -128,50 +128,95 @@ class EventDatabaseEngine:
         }
 
     def _resolve_filters(self, q_lower: str) -> Dict[str, str]:
-        """Extracts event name, city, month, and category filters from text."""
+        """Dynamically extracts event name, city, month, venue, and category filters from text."""
         filters = {}
 
-        # 1. Event filter
-        if any(w in q_lower for w in ["ai summit", "tech summit", "global ai", "ai conference", "technology summit", "tech conf"]):
-            filters["event"] = "e.name LIKE '%Global AI & Tech Summit%'"
-        elif any(w in q_lower for w in ["neon", "jazz", "music festival", "neon nights", "jazz festival", "starline"]):
-            filters["event"] = "e.name LIKE '%Neon Nights%'"
-        elif any(w in q_lower for w in ["cyber", "cybersecurity", "cloud defense", "expo", "defense expo", "security expo", "cyberguard"]):
-            filters["event"] = "e.name LIKE '%Cybersecurity%'"
-        elif any(w in q_lower for w in ["symphony", "gala", "beethoven", "orchestra", "classical music", "philharmonic"]):
-            filters["event"] = "e.name LIKE '%World Symphony%'"
-        elif any(w in q_lower for w in ["culinary", "wine", "food", "chef", "epicurean", "tasting"]):
-            filters["event"] = "e.name LIKE '%Culinary%' OR e.name LIKE '%Wine%'"
+        # 1. Dynamic Event Name Filter from Database
+        try:
+            ev_res = DatabaseSecurityEngine.execute_safe_query(self.db_path, "SELECT event_id, name FROM events")
+            db_events = ev_res.get("data", [])
+        except Exception:
+            db_events = []
 
-        # 2. City filter
-        if any(w in q_lower for w in ["san francisco", "sf"]):
-            filters["city"] = "l.city LIKE '%San Francisco%'"
-        elif any(w in q_lower for w in ["new york", "nyc", "manhattan"]):
-            filters["city"] = "l.city LIKE '%New York%'"
-        elif "chicago" in q_lower:
-            filters["city"] = "l.city LIKE '%Chicago%'"
-        elif "austin" in q_lower:
-            filters["city"] = "l.city LIKE '%Austin%'"
-        elif "boston" in q_lower:
-            filters["city"] = "l.city LIKE '%Boston%'"
+        best_match_name = None
+        highest_score = 0
+        common_skip = {"expo", "summit", "festival", "gala", "world", "annual", "international", "2026", "2025", "the", "and", "for"}
 
-        # 3. Month filter
-        if "november" in q_lower or "-11" in q_lower:
-            filters["month"] = "s.event_date LIKE '%-11-%'"
-        elif "december" in q_lower or "-12" in q_lower:
-            filters["month"] = "s.event_date LIKE '%-12-%'"
+        for ev in db_events:
+            ev_name = ev["name"]
+            ev_lower = ev_name.lower()
+            
+            # Exact substring match
+            if ev_lower in q_lower:
+                best_match_name = ev_name
+                highest_score = 100
+                break
+            
+            # Substring match without common words
+            cleaned_ev_words = [w for w in re.findall(r'[a-zA-Z0-9]+', ev_lower) if w not in common_skip and len(w) >= 3]
+            score = 0
+            for w in cleaned_ev_words:
+                if w in q_lower:
+                    score += 2
+            
+            if score > highest_score and score >= 2:
+                highest_score = score
+                best_match_name = ev_name
 
-        # 4. Venue filter
-        if "moscone" in q_lower:
-            filters["venue"] = "l.venue_name LIKE '%Moscone%'"
-        elif "javits" in q_lower:
-            filters["venue"] = "l.venue_name LIKE '%Javits%'"
-        elif any(w in q_lower for w in ["moody", "waterloo"]):
-            filters["venue"] = "l.venue_name LIKE '%Moody%'"
-        elif "mccormick" in q_lower:
-            filters["venue"] = "l.venue_name LIKE '%McCormick%'"
-        elif "symphony hall" in q_lower:
-            filters["venue"] = "l.venue_name LIKE '%Symphony Hall%'"
+        if best_match_name:
+            filters["event"] = f"e.name = '{best_match_name}'"
+        else:
+            # Fallback keyword checks if DB query returned empty or didn't match
+            if any(w in q_lower for w in ["ai summit", "global ai", "tech summit"]):
+                filters["event"] = "e.name LIKE '%Global AI & Tech Summit%'"
+            elif any(w in q_lower for w in ["neon", "jazz", "neon nights"]):
+                filters["event"] = "e.name LIKE '%Neon Nights%'"
+            elif any(w in q_lower for w in ["cyber", "cybersecurity", "cloud defense"]):
+                filters["event"] = "e.name LIKE '%Cybersecurity%'"
+            elif any(w in q_lower for w in ["symphony", "beethoven", "orchestra", "philharmonic"]):
+                filters["event"] = "e.name LIKE '%World Symphony%'"
+            elif any(w in q_lower for w in ["culinary", "wine", "epicurean", "tasting"]):
+                filters["event"] = "e.name LIKE '%Culinary%' OR e.name LIKE '%Wine%'"
+
+        # 2. Dynamic City Filter
+        try:
+            loc_res = DatabaseSecurityEngine.execute_safe_query(self.db_path, "SELECT DISTINCT city, venue_name FROM event_locations")
+            db_locations = loc_res.get("data", [])
+        except Exception:
+            db_locations = []
+
+        for loc in db_locations:
+            city = loc.get("city")
+            if city and city.lower() in q_lower:
+                filters["city"] = f"l.city LIKE '%{city}%'"
+                break
+
+        # Fallback aliases for cities
+        if "city" not in filters:
+            if "sf" in q_lower.split():
+                filters["city"] = "l.city LIKE '%San Francisco%'"
+            elif any(w in q_lower for w in ["nyc", "manhattan"]):
+                filters["city"] = "l.city LIKE '%New York%'"
+
+        # 3. Dynamic Venue Filter
+        for loc in db_locations:
+            v_name = loc.get("venue_name")
+            if v_name:
+                first_word = v_name.split()[0].lower()
+                if len(first_word) >= 4 and first_word in q_lower:
+                    filters["venue"] = f"l.venue_name LIKE '%{v_name.split()[0]}%'"
+                    break
+
+        # 4. Month filter
+        months = {
+            "january": "-01-", "february": "-02-", "march": "-03-", "april": "-04-",
+            "may": "-05-", "june": "-06-", "july": "-07-", "august": "-08-",
+            "september": "-09-", "october": "-10-", "november": "-11-", "december": "-12-"
+        }
+        for m_name, m_code in months.items():
+            if m_name in q_lower or m_code in q_lower:
+                filters["month"] = f"s.event_date LIKE '%{m_code}%'"
+                break
 
         return filters
 
