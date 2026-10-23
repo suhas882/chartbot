@@ -207,30 +207,134 @@ class EventDatabaseEngine:
                     filters["venue"] = f"l.venue_name LIKE '%{v_name.split()[0]}%'"
                     break
 
-        # 4. Month filter
-        months = {
-            "january": "-01-", "february": "-02-", "march": "-03-", "april": "-04-",
-            "may": "-05-", "june": "-06-", "july": "-07-", "august": "-08-",
-            "september": "-09-", "october": "-10-", "november": "-11-", "december": "-12-"
+        # 4. Comprehensive Date & Month Resolution
+        month_map = {
+            "jan": ("01", "January"), "january": ("01", "January"),
+            "feb": ("02", "February"), "february": ("02", "February"),
+            "mar": ("03", "March"), "march": ("03", "March"),
+            "apr": ("04", "April"), "april": ("04", "April"),
+            "may": ("05", "May"),
+            "jun": ("06", "June"), "june": ("06", "June"),
+            "jul": ("07", "July"), "july": ("07", "July"),
+            "aug": ("08", "August"), "august": ("08", "August"),
+            "sep": ("09", "September"), "sept": ("09", "September"), "september": ("09", "September"),
+            "oct": ("10", "October"), "october": ("10", "October"),
+            "nov": ("11", "November"), "november": ("11", "November"),
+            "dec": ("12", "December"), "december": ("12", "December")
         }
-        for m_name, m_code in months.items():
-            if m_name in q_lower or m_code in q_lower:
-                filters["month"] = f"s.event_date LIKE '%{m_code}%'"
-                break
+
+        # Pattern A: Day then Month (e.g., "25th nov", "25 november", "25th of nov", "25 nov")
+        m_day_month = re.search(
+            r'\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b',
+            q_lower
+        )
+
+        # Pattern B: Month then Day (e.g., "nov 25th", "november 25", "nov 25")
+        m_month_day = re.search(
+            r'\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b',
+            q_lower
+        )
+
+        # Pattern C: ISO / standard date (e.g., "2026-11-25" or "11-25")
+        m_iso = re.search(r'\b(?:202[4-9]-)?(\d{2})-(\d{2})\b', q_lower)
+
+        if m_day_month:
+            day_num = int(m_day_month.group(1))
+            m_str = m_day_month.group(2).lower()
+            m_code, m_name = month_map[m_str]
+            formatted_date = f"-{m_code}-{day_num:02d}"
+            filters["date"] = f"s.event_date LIKE '%{formatted_date}%'"
+            filters["_parsed_date_str"] = f"{m_name} {day_num}"
+            filters["_parsed_month_code"] = m_code
+            filters["_parsed_month_name"] = m_name
+        elif m_month_day:
+            m_str = m_month_day.group(1).lower()
+            day_num = int(m_month_day.group(2))
+            m_code, m_name = month_map[m_str]
+            formatted_date = f"-{m_code}-{day_num:02d}"
+            filters["date"] = f"s.event_date LIKE '%{formatted_date}%'"
+            filters["_parsed_date_str"] = f"{m_name} {day_num}"
+            filters["_parsed_month_code"] = m_code
+            filters["_parsed_month_name"] = m_name
+        elif m_iso:
+            m_code = m_iso.group(1)
+            day_num = int(m_iso.group(2))
+            formatted_date = f"-{m_code}-{day_num:02d}"
+            filters["date"] = f"s.event_date LIKE '%{formatted_date}%'"
+            filters["_parsed_date_str"] = f"Month {m_code}, Day {day_num}"
+            filters["_parsed_month_code"] = m_code
+        else:
+            # Just Month (without specific day, e.g. "in november", "events in nov", "december schedule")
+            for m_key, (m_code, m_name) in month_map.items():
+                if re.search(rf'\b{m_key}\b', q_lower):
+                    filters["month"] = f"s.event_date LIKE '%-{m_code}-%'"
+                    filters["_parsed_month_name"] = m_name
+                    filters["_parsed_month_code"] = m_code
+                    break
 
         return filters
 
     def _combine_where_clauses(self, filters: Dict[str, str]) -> str:
-        if not filters:
+        clauses = [v for k, v in filters.items() if not k.startswith("_")]
+        if not clauses:
             return "1=1"
-        return " AND ".join(filters.values())
+        return " AND ".join(clauses)
 
     def _plan_query(self, q_lower: str, user_query: str) -> Tuple[str, str]:
         """
         Determines the exact SQL query and intent based on natural language understanding.
         """
         filters = self._resolve_filters(q_lower)
+        self._last_filters = filters
         where_clause = self._combine_where_clauses(filters)
+
+        # 0. Specific Date Events (e.g. "any events on 25th nov", "events scheduled for nov 15", "events on 2026-11-20")
+        if filters.get("date") and not any(w in q_lower for w in ["seat", "ticket", "cost", "price", "link", "url", "where"]):
+            intent = "SPECIFIC_DATE_EVENTS"
+            sql = f"""
+            SELECT 
+                e.name AS event_name,
+                e.category,
+                e.description,
+                e.organizer,
+                l.venue_name,
+                l.city,
+                l.state,
+                s.event_date,
+                s.start_time,
+                s.end_time,
+                (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'ticket_booking' LIMIT 1) AS booking_url
+            FROM events e
+            JOIN event_schedules s ON e.event_id = s.event_id
+            JOIN event_locations l ON s.location_id = l.location_id
+            WHERE {where_clause}
+            ORDER BY s.event_date
+            """
+            return intent, sql
+
+        # 0b. Month-only Events (e.g. "what events in november", "any events in dec")
+        if filters.get("month") and not filters.get("event") and not any(w in q_lower for w in ["seat", "ticket", "cost", "price", "link", "url", "where"]):
+            intent = "MONTH_EVENTS"
+            sql = f"""
+            SELECT 
+                e.name AS event_name,
+                e.category,
+                e.description,
+                e.organizer,
+                l.venue_name,
+                l.city,
+                l.state,
+                s.event_date,
+                s.start_time,
+                s.end_time,
+                (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'ticket_booking' LIMIT 1) AS booking_url
+            FROM events e
+            JOIN event_schedules s ON e.event_id = s.event_id
+            JOIN event_locations l ON s.location_id = l.location_id
+            WHERE {where_clause}
+            ORDER BY s.event_date
+            """
+            return intent, sql
 
         # 1. Multi-location event check
         if any(w in q_lower for w in ["two different locations", "multiple locations", "two locations", "different venues", "different cities", "both locations", "multi-location", "more than one city"]):
@@ -467,14 +571,82 @@ class EventDatabaseEngine:
 
     def _format_response(self, intent: str, records: List[Dict[str, Any]], query: str) -> str:
         """Formats records into clean markdown with clickable links."""
+        filters = getattr(self, "_last_filters", {})
         if not records:
+            parsed_date = filters.get("_parsed_date_str")
+            if parsed_date:
+                month_code = filters.get("_parsed_month_code")
+                month_name = filters.get("_parsed_month_name", "that month")
+                alt_events = []
+                if month_code:
+                    try:
+                        alt_res = DatabaseSecurityEngine.execute_safe_query(
+                            self.db_path,
+                            f"""
+                            SELECT e.name, l.city, l.state, s.event_date,
+                                   (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'ticket_booking' LIMIT 1) AS booking_url
+                            FROM events e
+                            JOIN event_schedules s ON e.event_id = s.event_id
+                            JOIN event_locations l ON s.location_id = l.location_id
+                            WHERE s.event_date LIKE '%-{month_code}-%'
+                            ORDER BY s.event_date
+                            """
+                        )
+                        alt_events = alt_res.get("data", [])
+                    except Exception:
+                        alt_events = []
+
+                resp = f"📅 **No events are scheduled for {parsed_date}, 2026.**\n\n"
+                if alt_events:
+                    resp += f"Here are upcoming events scheduled in **{month_name}**:\n\n"
+                    for a in alt_events:
+                        link = f" • [Book Tickets]({a['booking_url']})" if a.get("booking_url") else ""
+                        resp += f"• **{a['name']}** on **{a['event_date']}** in {a['city']}, {a['state']}{link}\n"
+                else:
+                    resp += "You can ask **'What events are available?'** to view all scheduled dates across 2026."
+                return resp
+
+            parsed_month = filters.get("_parsed_month_name")
+            if parsed_month:
+                return f"📅 **No events are scheduled in {parsed_month} 2026.** You can ask **'What events are available?'** to see all scheduled events."
+
             return (
                 "No matching records were found in the database for your query. "
                 "You can ask **'What events are available?'** to see all scheduled events."
             )
 
+        # Case 0: Specific Date Events
+        if intent == "SPECIFIC_DATE_EVENTS":
+            date_label = filters.get("_parsed_date_str", records[0]['event_date'])
+            text = f"### 🗓️ Events Scheduled for **{date_label}, 2026** ({len(records)} found)\n\n"
+            for i, r in enumerate(records, 1):
+                link_part = f" • [Book Tickets]({r['booking_url']})" if r.get("booking_url") else ""
+                text += (
+                    f"**{i}. {r['event_name']}** (`{r['category']}`)\n"
+                    f"• **Organizer:** {r['organizer']}\n"
+                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Date & Time:** {r['event_date']} from {r['start_time']} to {r.get('end_time', 'End')}{link_part}\n"
+                    f"• **Overview:** {r['description']}\n\n"
+                )
+            return text.strip()
+
+        # Case 0b: Month Events
+        elif intent == "MONTH_EVENTS":
+            m_label = filters.get("_parsed_month_name", "that month")
+            text = f"### 🗓️ Upcoming Events in **{m_label} 2026** ({len(records)} found)\n\n"
+            for i, r in enumerate(records, 1):
+                link_part = f" • [Book Tickets]({r['booking_url']})" if r.get("booking_url") else ""
+                text += (
+                    f"**{i}. {r['event_name']}** (`{r['category']}`)\n"
+                    f"• **Organizer:** {r['organizer']}\n"
+                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Date & Time:** {r['event_date']} at {r['start_time']}{link_part}\n"
+                    f"• **Overview:** {r['description']}\n\n"
+                )
+            return text.strip()
+
         # Case 1: Multi-location check
-        if intent == "MULTI_LOCATION_CHECK":
+        elif intent == "MULTI_LOCATION_CHECK":
             event_name = records[0]["event_name"]
             text = f"Yes! **{event_name}** is scheduled to take place at **{len(records)} different locations**:\n\n"
             for i, r in enumerate(records, 1):

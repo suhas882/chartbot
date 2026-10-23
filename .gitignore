@@ -23,6 +23,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.log
+cloudflared.exe
 
 # Sensitive environment variables
 .env
