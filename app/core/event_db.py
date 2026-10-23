@@ -6,6 +6,7 @@ and clickable event URLs.
 Enforces backend access control via DatabaseSecurityEngine.
 """
 
+import json
 import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -14,6 +15,41 @@ from app.core.db_security import DatabaseSecurityEngine, SecurityAccessDeniedErr
 
 DB_PATH = DATA_DIR / "events.db"
 
+VALID_INTENTS = {
+    "SPECIFIC_DATE_EVENTS",
+    "MONTH_EVENTS",
+    "MULTI_LOCATION_CHECK",
+    "SEAT_DETAILS",
+    "EVENT_URL",
+    "TICKET_AVAILABILITY",
+    "LIST_ALL_EVENTS",
+    "EVENT_DETAILS_INFO",
+    "VENUE_LOCATION",
+    "DATE_SCHEDULE",
+}
+
+INTENT_CLASSIFY_PROMPT = """You classify questions about Indian events, tickets, seats, venues, dates, and booking URLs.
+Return ONLY compact JSON:
+{"intent":"ONE_INTENT","event":"","city":""}
+intent must be one of:
+SEAT_DETAILS, TICKET_AVAILABILITY, EVENT_URL, VENUE_LOCATION, DATE_SCHEDULE,
+MULTI_LOCATION_CHECK, LIST_ALL_EVENTS, EVENT_DETAILS_INFO, MONTH_EVENTS, SPECIFIC_DATE_EVENTS
+event: event name from the catalog if mentioned, else empty string.
+city: Indian city if mentioned, else empty string.
+Do not invent events that are not in the catalog.
+"""
+
+ANSWER_SYSTEM_PROMPT = """You are Chartbot, an events assistant for India.
+Use ONLY the provided database records. Do not invent events, seats, prices, or URLs.
+Rules:
+1. Answer in clear markdown.
+2. When a record has booking_url, event_link, official_url, venue_map_url, or url, include a markdown link [label](url).
+3. Format INR prices as ₹ with thousands separators.
+4. If seat_code is present, list the seat codes grouped by section.
+5. Locations are in India. Include city and state.
+6. If records are empty, say no matching public event data was found.
+"""
+
 class EventDatabaseEngine:
     """
     Translates user questions into scoped, least-privilege SQL queries,
@@ -21,8 +57,9 @@ class EventDatabaseEngine:
     actionable responses with clickable event links.
     """
 
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Path = DB_PATH, llm_client=None):
         self.db_path = db_path
+        self.llm = llm_client
 
     def inspect_restricted_intent(self, query: str) -> Optional[Dict[str, Any]]:
         """
@@ -46,6 +83,83 @@ class EventDatabaseEngine:
                     "reason": f"Access Denied: Inquiries regarding {desc} are strictly prohibited by backend access control policy."
                 }
         return None
+
+    def _understand_with_llm(self, user_query: str) -> Dict[str, Any]:
+        if not self.llm:
+            return {}
+        catalog = {"events": [], "cities": []}
+        try:
+            ev_res = DatabaseSecurityEngine.execute_safe_query(self.db_path, "SELECT name, category FROM events")
+            catalog["events"] = ev_res.get("data", [])
+            loc_res = DatabaseSecurityEngine.execute_safe_query(
+                self.db_path, "SELECT DISTINCT city, state, venue_name FROM event_locations"
+            )
+            catalog["cities"] = loc_res.get("data", [])
+        except Exception:
+            pass
+
+        prompt = (
+            f"Event catalog: {json.dumps(catalog, ensure_ascii=True)}\n"
+            f"Question: {user_query}\n"
+            "JSON:"
+        )
+        try:
+            raw = self.llm.generate(prompt, system_prompt=INTENT_CLASSIFY_PROMPT)
+            match = re.search(r"\{.*\}", raw or "", re.DOTALL)
+            if not match:
+                return {}
+            parsed = json.loads(match.group(0))
+            intent = str(parsed.get("intent", "")).upper().strip()
+            if intent not in VALID_INTENTS:
+                return {}
+            return {
+                "intent": intent,
+                "event": str(parsed.get("event") or "").strip(),
+                "city": str(parsed.get("city") or "").strip(),
+            }
+        except Exception:
+            return {}
+
+    def _generate_with_llm(
+        self,
+        user_query: str,
+        intent: str,
+        records: List[Dict[str, Any]],
+        fallback_text: str,
+    ) -> Optional[str]:
+        if not self.llm:
+            return None
+        safe_records = []
+        for row in records[:20]:
+            safe_records.append({k: v for k, v in row.items() if v is not None})
+        prompt = (
+            f"Intent: {intent}\n"
+            f"Question: {user_query}\n"
+            f"Database records JSON: {json.dumps(safe_records, ensure_ascii=True, default=str)}\n"
+            "Write the user-facing answer now."
+        )
+        try:
+            answer = (self.llm.generate(prompt, system_prompt=ANSWER_SYSTEM_PROMPT) or "").strip()
+        except Exception:
+            return None
+        if len(answer) < 40:
+            return None
+        urls = {
+            str(row[key])
+            for row in records
+            for key in ("booking_url", "event_link", "url", "official_url", "venue_map_url")
+            if row.get(key)
+        }
+        if urls and not all(url in answer for url in urls):
+            return fallback_text
+        if intent == "SEAT_DETAILS" and any(str(row["seat_code"]) not in answer for row in records):
+            return fallback_text
+        if intent == "TICKET_AVAILABILITY" and any(
+            str(row["tier_name"]) not in answer or str(row["tickets_available"]) not in answer
+            for row in records
+        ):
+            return fallback_text
+        return answer
 
     def execute_natural_query(self, user_query: str) -> Dict[str, Any]:
         """
@@ -79,16 +193,18 @@ class EventDatabaseEngine:
                     "steps": [
                         "Analyzed question intent",
                         "Detected request for restricted/sensitive data",
-                        "Submitted query to DatabaseSecurityEngine for AST inspection",
+                        "Submitted a deliberately unauthorized query to the database security engine",
                         "Security Engine raised SecurityAccessDeniedError: Table and column access blocked",
                         "Generated security refusal"
                     ],
                     "records": []
                 }
 
-        # Step 2: Intelligent NLP Query Analysis
+        # Step 2: Llama/Ollama understands the question; SQL is still built from a whitelist planner
         q_lower = user_query.lower()
-        intent, sql = self._plan_query(q_lower, user_query)
+        llm_plan = self._understand_with_llm(user_query) or {}
+        self._llm_plan = llm_plan
+        intent, sql = self._plan_query(q_lower, user_query, llm_plan)
 
         # Step 3: Run safe query through DatabaseSecurityEngine
         try:
@@ -105,8 +221,11 @@ class EventDatabaseEngine:
                 "records": []
             }
 
-        # Step 4: Synthesize user-friendly natural language answer with clickable URLs
+        # Step 4: Grounded answer from live rows (Llama wording, DB facts; formatter fallback)
         response_text = self._format_response(intent, query_result["data"], user_query)
+        llm_answer = self._generate_with_llm(user_query, intent, query_result["data"], response_text)
+        if llm_answer:
+            response_text = llm_answer
 
         return {
             "status": "SUCCESS",
@@ -119,11 +238,11 @@ class EventDatabaseEngine:
             "row_count": query_result["row_count"],
             "records": query_result["data"],
             "steps": [
-                f"Understood question intent: '{intent}'",
+                f"Llama/Ollama understood intent: '{intent}'" if llm_plan.get("intent") else f"Keyword planner understood intent: '{intent}'",
                 f"Generated scoped SQL accessing only whitelisted tables: {', '.join(query_result['tables_accessed'])}",
-                f"Backend security engine validated 0 restricted tables and 0 sensitive columns",
+                "Backend security engine validated 0 restricted tables and 0 sensitive columns",
                 f"Executed read-only SQLite query (Retrieved {query_result['row_count']} rows)",
-                "Generated grounded answer with clickable URLs"
+                "Generated grounded answer with clickable event URLs from the database"
             ]
         }
 
@@ -164,7 +283,8 @@ class EventDatabaseEngine:
                 best_match_name = ev_name
 
         if best_match_name:
-            filters["event"] = f"e.name = '{best_match_name}'"
+            safe_name = best_match_name.replace("'", "''")
+            filters["event"] = f"e.name = '{safe_name}'"
         else:
             # Fallback keyword checks if DB query returned empty or didn't match
             if any(w in q_lower for w in ["ai summit", "global ai", "tech summit"]):
@@ -188,15 +308,32 @@ class EventDatabaseEngine:
         for loc in db_locations:
             city = loc.get("city")
             if city and city.lower() in q_lower:
-                filters["city"] = f"l.city LIKE '%{city}%'"
+                safe_city = city.replace("'", "''")
+                filters["city"] = f"l.city LIKE '%{safe_city}%'"
                 break
 
-        # Fallback aliases for cities
+        # Fallback aliases for Indian cities
         if "city" not in filters:
-            if "sf" in q_lower.split():
-                filters["city"] = "l.city LIKE '%San Francisco%'"
-            elif any(w in q_lower for w in ["nyc", "manhattan"]):
-                filters["city"] = "l.city LIKE '%New York%'"
+            city_aliases = {
+                "bengaluru": "Bengaluru",
+                "bangalore": "Bengaluru",
+                "blr": "Bengaluru",
+                "hyderabad": "Hyderabad",
+                "hyd": "Hyderabad",
+                "mumbai": "Mumbai",
+                "bombay": "Mumbai",
+                "delhi": "New Delhi",
+                "new delhi": "New Delhi",
+                "noida": "New Delhi",
+                "chennai": "Chennai",
+                "madras": "Chennai",
+                "goa": "Goa",
+                "panaji": "Goa",
+            }
+            for alias, city in city_aliases.items():
+                if re.search(rf"\b{re.escape(alias)}\b", q_lower):
+                    filters["city"] = f"l.city LIKE '%{city}%'"
+                    break
 
         # 3. Dynamic Venue Filter
         for loc in db_locations:
@@ -204,7 +341,8 @@ class EventDatabaseEngine:
             if v_name:
                 first_word = v_name.split()[0].lower()
                 if len(first_word) >= 4 and first_word in q_lower:
-                    filters["venue"] = f"l.venue_name LIKE '%{v_name.split()[0]}%'"
+                    safe_venue_token = v_name.split()[0].replace("'", "''")
+                    filters["venue"] = f"l.venue_name LIKE '%{safe_venue_token}%'"
                     break
 
         # 4. Comprehensive Date & Month Resolution
@@ -280,13 +418,54 @@ class EventDatabaseEngine:
             return "1=1"
         return " AND ".join(clauses)
 
-    def _plan_query(self, q_lower: str, user_query: str) -> Tuple[str, str]:
+    def _apply_llm_filters(self, filters: Dict[str, str], llm_plan: Dict[str, Any]) -> Dict[str, str]:
+        if not llm_plan:
+            return filters
+        event_hint = (llm_plan.get("event") or "").strip()
+        city_hint = (llm_plan.get("city") or "").strip()
+        if event_hint and "event" not in filters:
+            try:
+                ev_res = DatabaseSecurityEngine.execute_safe_query(self.db_path, "SELECT name FROM events")
+                names = [r["name"] for r in ev_res.get("data", [])]
+            except Exception:
+                names = []
+            hint_l = event_hint.lower()
+            for name in names:
+                if hint_l in name.lower() or name.lower() in hint_l:
+                    safe_name = name.replace("'", "''")
+                    filters["event"] = f"e.name = '{safe_name}'"
+                    break
+        if city_hint and "city" not in filters:
+            try:
+                loc_res = DatabaseSecurityEngine.execute_safe_query(
+                    self.db_path, "SELECT DISTINCT city FROM event_locations"
+                )
+                cities = [r["city"] for r in loc_res.get("data", [])]
+            except Exception:
+                cities = []
+            hint_l = city_hint.lower()
+            for city in cities:
+                if hint_l in city.lower() or city.lower() in hint_l:
+                    safe_city = city.replace("'", "''")
+                    filters["city"] = f"l.city LIKE '%{safe_city}%'"
+                    break
+        return filters
+
+    def _plan_query(self, q_lower: str, user_query: str, llm_plan: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
         """
         Determines the exact SQL query and intent based on natural language understanding.
+        SQL is never taken from the LLM; only intent and filters may be.
         """
         filters = self._resolve_filters(q_lower)
+        filters = self._apply_llm_filters(filters, llm_plan or {})
         self._last_filters = filters
         where_clause = self._combine_where_clauses(filters)
+        llm_intent = (llm_plan or {}).get("intent") if llm_plan else None
+
+        def uses(intent_name: str, keywords: List[str]) -> bool:
+            if llm_intent:
+                return llm_intent == intent_name
+            return any(w in q_lower for w in keywords)
 
         # 0. Specific Date Events (e.g. "any events on 25th nov", "events scheduled for nov 15", "events on 2026-11-20")
         if filters.get("date") and not any(w in q_lower for w in ["seat", "ticket", "cost", "price", "link", "url", "where"]):
@@ -300,6 +479,7 @@ class EventDatabaseEngine:
                 l.venue_name,
                 l.city,
                 l.state,
+                l.country,
                 s.event_date,
                 s.start_time,
                 s.end_time,
@@ -324,6 +504,7 @@ class EventDatabaseEngine:
                 l.venue_name,
                 l.city,
                 l.state,
+                l.country,
                 s.event_date,
                 s.start_time,
                 s.end_time,
@@ -337,7 +518,7 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 1. Multi-location event check
-        if any(w in q_lower for w in ["two different locations", "multiple locations", "two locations", "different venues", "different cities", "both locations", "multi-location", "more than one city"]):
+        if uses("MULTI_LOCATION_CHECK", ["two different locations", "multiple locations", "two locations", "different venues", "different cities", "both locations", "multi-location", "more than one city"]):
             intent = "MULTI_LOCATION_CHECK"
             sql = """
             SELECT 
@@ -346,6 +527,7 @@ class EventDatabaseEngine:
                 l.venue_name,
                 l.city,
                 l.state,
+                l.country,
                 s.event_date,
                 s.start_time,
                 s.end_time,
@@ -363,7 +545,7 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 2. Seat Codes and Seat Details
-        if any(w in q_lower for w in ["seat code", "seat details", "seats", "seat numbers", "row", "section", "accessible", "wheelchair", "front row"]):
+        if uses("SEAT_DETAILS", ["seat code", "seat details", "seats", "seat numbers", "row", "section", "accessible", "wheelchair", "front row"]):
             intent = "SEAT_DETAILS"
             acc_filter = "AND st.is_accessible = 1" if any(w in q_lower for w in ["accessible", "wheelchair", "handicap"]) else ""
             sql = f"""
@@ -371,25 +553,27 @@ class EventDatabaseEngine:
                 e.name AS event_name,
                 l.venue_name,
                 l.city,
+                l.state,
+                l.country,
                 st.seat_code,
                 st.section,
                 st.row_num,
                 st.seat_number,
                 st.tier_name,
                 st.is_accessible,
-                (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'venue_map' LIMIT 1) AS venue_map_url
+                 (SELECT u.url FROM event_urls u WHERE u.schedule_id = s.schedule_id AND u.url_type = 'venue_map' LIMIT 1) AS venue_map_url
             FROM seats st
             JOIN event_schedules s ON st.schedule_id = s.schedule_id
             JOIN events e ON s.event_id = e.event_id
             JOIN event_locations l ON st.location_id = l.location_id
             WHERE {where_clause} {acc_filter}
             ORDER BY st.section, st.seat_number
-            LIMIT 25
+            LIMIT 50
             """
             return intent, sql
 
         # 3. Specific Event Link / Booking URL
-        if any(w in q_lower for w in ["link", "url", "website", "book link", "ticket link", "registration link", "where to register", "how to book", "direct link"]):
+        if uses("EVENT_URL", ["link", "url", "website", "book link", "ticket link", "registration link", "where to register", "how to book", "direct link"]):
             intent = "EVENT_URL"
             sql = f"""
             SELECT DISTINCT 
@@ -410,7 +594,7 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 4. Ticket Availability & Pricing (Prioritized before generic questions)
-        if any(w in q_lower for w in [
+        if uses("TICKET_AVAILABILITY", [
             "ticket", "tickets", "price", "prices", "cost", "how much", "cheapest",
             "cheap", "lowest", "affordable", "pass", "passes", "sold out", "admission",
             "tier", "tiers", "vip pass", "rate"
@@ -423,6 +607,8 @@ class EventDatabaseEngine:
                 e.name AS event_name,
                 l.venue_name,
                 l.city,
+                l.state,
+                l.country,
                 s.event_date,
                 t.tier_name,
                 t.price,
@@ -443,11 +629,11 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 5. Overview of All Available Events / Event Discovery
-        if any(w in q_lower for w in [
+        if (uses("LIST_ALL_EVENTS", [
             "what events", "all events", "show events", "list events", "available events",
             "upcoming events", "what can i attend", "events list", "what is happening",
             "tell me what events", "any events", "show me events", "what conferences"
-        ]) and "event" not in filters:
+        ]) and "event" not in filters) or (llm_intent == "LIST_ALL_EVENTS" and "event" not in filters):
             intent = "LIST_ALL_EVENTS"
             sql = f"""
             SELECT 
@@ -458,6 +644,7 @@ class EventDatabaseEngine:
                 l.venue_name,
                 l.city,
                 l.state,
+                l.country,
                 s.event_date,
                 s.start_time,
                 (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'ticket_booking' LIMIT 1) AS booking_url
@@ -470,11 +657,11 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 6. Organizer & Event Background Details
-        if any(w in q_lower for w in [
+        if uses("EVENT_DETAILS_INFO", [
             "organizer", "who is organizing", "who organizes", "tell me about",
             "describe", "overview", "what is the event", "what is the summit",
             "what is the festival", "what is the expo", "what is the gala"
-        ]) or (filters.get("event") and any(w in q_lower for w in ["what is", "about", "info", "details"])):
+        ]) or (not llm_intent and filters.get("event") and any(w in q_lower for w in ["what is", "about", "info", "details"])):
             intent = "EVENT_DETAILS_INFO"
             sql = f"""
             SELECT 
@@ -486,6 +673,7 @@ class EventDatabaseEngine:
                 l.address,
                 l.city,
                 l.state,
+                l.country,
                 l.capacity,
                 s.event_date,
                 s.start_time,
@@ -501,7 +689,7 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 7. Venue & Location Queries (Where, Address, Capacity)
-        if any(w in q_lower for w in ["where is", "where are", "venue", "location", "address", "city", "capacity", "how many people", "where will", "cities"]):
+        if uses("VENUE_LOCATION", ["where is", "where are", "venue", "location", "address", "city", "capacity", "how many people", "where will", "cities"]):
             intent = "VENUE_LOCATION"
             sql = f"""
             SELECT 
@@ -525,7 +713,7 @@ class EventDatabaseEngine:
             return intent, sql
 
         # 8. Date & Time Queries (When, Timing, Doors Open, Schedule)
-        if any(w in q_lower for w in ["when is", "when are", "date", "dates", "timing", "what time", "schedule", "doors open", "when will", "november", "december"]):
+        if uses("DATE_SCHEDULE", ["when is", "when are", "date", "dates", "timing", "what time", "schedule", "doors open", "when will", "november", "december"]):
             intent = "DATE_SCHEDULE"
             sql = f"""
             SELECT 
@@ -534,6 +722,7 @@ class EventDatabaseEngine:
                 l.venue_name,
                 l.city,
                 l.state,
+                l.country,
                 s.event_date,
                 s.start_time,
                 s.end_time,
@@ -558,6 +747,7 @@ class EventDatabaseEngine:
             l.venue_name,
             l.city,
             l.state,
+            l.country,
             s.event_date,
             s.start_time,
             (SELECT u.url FROM event_urls u WHERE u.event_id = e.event_id AND u.url_type = 'ticket_booking' LIMIT 1) AS booking_url
@@ -568,6 +758,21 @@ class EventDatabaseEngine:
         ORDER BY s.event_date
         """
         return intent, sql
+
+    @staticmethod
+    def _loc_label(r: Dict[str, Any]) -> str:
+        city = r.get("city") or ""
+        state = r.get("state") or ""
+        country = r.get("country") or "India"
+        return f"{city}, {state}, {country}".strip(", ")
+
+    @staticmethod
+    def _price_label(r: Dict[str, Any]) -> str:
+        amount = r.get("price") or 0
+        currency = r.get("currency") or "INR"
+        if currency == "INR":
+            return f"₹{amount:,.0f}"
+        return f"{amount:.2f} {currency}"
 
     def _format_response(self, intent: str, records: List[Dict[str, Any]], query: str) -> str:
         """Formats records into clean markdown with clickable links."""
@@ -601,7 +806,7 @@ class EventDatabaseEngine:
                     resp += f"Here are upcoming events scheduled in **{month_name}**:\n\n"
                     for a in alt_events:
                         link = f" • [Book Tickets]({a['booking_url']})" if a.get("booking_url") else ""
-                        resp += f"• **{a['name']}** on **{a['event_date']}** in {a['city']}, {a['state']}{link}\n"
+                        resp += f"• **{a['name']}** on **{a['event_date']}** in {a['city']}, {a.get('state', '')}, India{link}\n"
                 else:
                     resp += "You can ask **'What events are available?'** to view all scheduled dates across 2026."
                 return resp
@@ -624,7 +829,7 @@ class EventDatabaseEngine:
                 text += (
                     f"**{i}. {r['event_name']}** (`{r['category']}`)\n"
                     f"• **Organizer:** {r['organizer']}\n"
-                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Location:** {r['venue_name']} ({self._loc_label(r)})\n"
                     f"• **Date & Time:** {r['event_date']} from {r['start_time']} to {r.get('end_time', 'End')}{link_part}\n"
                     f"• **Overview:** {r['description']}\n\n"
                 )
@@ -639,7 +844,7 @@ class EventDatabaseEngine:
                 text += (
                     f"**{i}. {r['event_name']}** (`{r['category']}`)\n"
                     f"• **Organizer:** {r['organizer']}\n"
-                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Location:** {r['venue_name']} ({self._loc_label(r)})\n"
                     f"• **Date & Time:** {r['event_date']} at {r['start_time']}{link_part}\n"
                     f"• **Overview:** {r['description']}\n\n"
                 )
@@ -653,7 +858,7 @@ class EventDatabaseEngine:
                 url_part = f" • [Book Tickets / View Details]({r['event_link']})" if r.get('event_link') else ""
                 text += (
                     f"**{i}. {r['city']} Edition**\n"
-                    f"• **Venue:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Venue:** {r['venue_name']} ({self._loc_label(r)})\n"
                     f"• **Date:** {r['event_date']} from {r['start_time']} to {r['end_time']}{url_part}\n\n"
                 )
             text += "Each edition features regional keynote tracks and live workshop sessions."
@@ -667,7 +872,7 @@ class EventDatabaseEngine:
                 text += (
                     f"**{i}. {r['event_name']}** (`{r['category']}`)\n"
                     f"• **Organizer:** {r['organizer']}\n"
-                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']})\n"
+                    f"• **Location:** {r['venue_name']} ({self._loc_label(r)})\n"
                     f"• **Date & Time:** {r['event_date']} at {r['start_time']}{link_part}\n"
                     f"• **Overview:** {r['description']}\n\n"
                 )
@@ -682,7 +887,7 @@ class EventDatabaseEngine:
                 f"• **Category:** `{r['category']}`\n"
                 f"• **Organized By:** **{r['organizer']}**\n"
                 f"• **Overview:** {r['description']}\n"
-                f"• **Venue:** {r['venue_name']} ({r['address']}, {r['city']}, {r['state']})\n"
+                f"• **Venue:** {r['venue_name']} ({r['address']}, {self._loc_label(r)})\n"
                 f"• **Venue Capacity:** {r['capacity']:,} attendees\n"
                 f"• **Scheduled Date:** **{r['event_date']}** ({r['start_time']} – {r['end_time']})\n"
             )
@@ -700,7 +905,7 @@ class EventDatabaseEngine:
                 text += (
                     f"**{r['event_name']}**\n"
                     f"• **Venue:** **{r['venue_name']}**\n"
-                    f"• **Address:** {r['address']}, {r['city']}, {r['state']} {r.get('postal_code', '')}\n"
+                    f"• **Address:** {r['address']}, {self._loc_label(r)} {r.get('postal_code', '')}\n"
                     f"• **Capacity:** {r['capacity']:,} guests\n"
                     f"• **Event Date:** {r['event_date']} at {r['start_time']}{link_part}\n\n"
                 )
@@ -716,32 +921,32 @@ class EventDatabaseEngine:
                     f"**{r['event_name']}**\n"
                     f"• **Date:** **{r['event_date']}**\n"
                     f"• **Time:** {r['start_time']} – {r['end_time']}{doors_part}\n"
-                    f"• **Location:** {r['venue_name']} ({r['city']}, {r['state']}){link_part}\n\n"
+                    f"• **Location:** {r['venue_name']} ({self._loc_label(r)}){link_part}\n\n"
                 )
             return text.strip()
 
         # Case 6: Seat Codes and Seat Details
         elif intent == "SEAT_DETAILS":
-            sample_r = records[0]
-            text = f"Here are the seat details and codes for **{sample_r['event_name']}** at **{sample_r['venue_name']} ({sample_r['city']})**:\n\n"
-            
-            sections: Dict[str, List[str]] = {}
+            event_groups: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
             for r in records:
-                sec = r["section"]
-                code_str = f"`{r['seat_code']}` ({r['tier_name']}, Row {r['row_num']}, Seat #{r['seat_number']})"
-                if r.get("is_accessible"):
-                    code_str += " ♿ Accessible"
-                sections.setdefault(sec, []).append(code_str)
+                event_key = (r["event_name"], r["venue_name"], r["city"])
+                event_groups.setdefault(event_key, []).append(r)
 
-            for sec_name, codes in sections.items():
-                text += f"**Section: {sec_name}** ({len(codes)} seats shown)\n"
-                text += "• " + ", ".join(codes[:8])
-                if len(codes) > 8:
-                    text += f" ...and {len(codes) - 8} more"
-                text += "\n\n"
-
-            if sample_r.get("venue_map_url"):
-                text += f"🔗 **Venue Map & Seat Selection:** [Click here to inspect seating map]({sample_r['venue_map_url']})"
+            text = "### 💺 Seat Details & Codes\n\n"
+            for (event_name, venue_name, city), event_rows in event_groups.items():
+                sample_r = event_rows[0]
+                text += f"**{event_name}** — {venue_name} ({self._loc_label(sample_r)})\n\n"
+                sections: Dict[str, List[str]] = {}
+                for r in event_rows:
+                    code = f"`{r['seat_code']}` — {r['row_num']}, Seat #{r['seat_number']} · {r['tier_name']}"
+                    if r.get("is_accessible"):
+                        code += " ♿ Accessible"
+                    sections.setdefault(r["section"], []).append(code)
+                for section_name, codes in sections.items():
+                    text += f"**{section_name}** ({len(codes)} seats)\n"
+                    text += "• " + "\n• ".join(codes) + "\n\n"
+                if sample_r.get("venue_map_url"):
+                    text += f"🔗 **Venue Map & Seat Selection:** [Open seating map]({sample_r['venue_map_url']})\n\n"
             return text
 
         # Case 7: Event Link / URL
@@ -766,11 +971,11 @@ class EventDatabaseEngine:
                 ev_name, ev_records = next(iter(events_dict.items()))
                 sample_r = ev_records[0]
                 text = f"### 🎟️ Ticket Availability for **{ev_name}**\n"
-                text += f"**Venue:** {sample_r['venue_name']} ({sample_r['city']}) | **Date:** {sample_r['event_date']}\n\n"
+                text += f"**Venue:** {sample_r['venue_name']} ({self._loc_label(sample_r)}) | **Date:** {sample_r['event_date']}\n\n"
                 for r in ev_records:
                     status_icon = "🟢" if r["availability_status"] == "AVAILABLE" else ("🟡" if r["availability_status"] == "LIMITED" else "🔴")
                     text += (
-                        f"• **{r['tier_name']}**: **${r['price']:.2f} {r['currency']}** {status_icon} *{r['availability_status']}*\n"
+                        f"• **{r['tier_name']}**: **{self._price_label(r)}** {status_icon} *{r['availability_status']}*\n"
                         f"  - **Available:** {r['tickets_available']} tickets remaining ({r['tickets_sold']} sold)\n"
                         f"  - **Perks:** {r.get('perks', 'Standard Admission')}\n"
                     )
@@ -783,10 +988,10 @@ class EventDatabaseEngine:
                 for ev_name, ev_records in events_dict.items():
                     sample_r = ev_records[0]
                     link_part = f" • [Book Tickets]({sample_r['booking_url']})" if sample_r.get("booking_url") else ""
-                    text += f"**{ev_name}** ({sample_r['venue_name']}, {sample_r['city']} - {sample_r['event_date']}){link_part}\n"
+                    text += f"**{ev_name}** ({sample_r['venue_name']}, {self._loc_label(sample_r)} - {sample_r['event_date']}){link_part}\n"
                     for r in ev_records[:3]:
                         status_icon = "🟢" if r["availability_status"] == "AVAILABLE" else ("🟡" if r["availability_status"] == "LIMITED" else "🔴")
-                        text += f"• **{r['tier_name']}**: ${r['price']:.2f} {status_icon} *{r['availability_status']}* ({r['tickets_available']} left)\n"
+                        text += f"• **{r['tier_name']}**: {self._price_label(r)} {status_icon} *{r['availability_status']}* ({r['tickets_available']} left)\n"
                     if len(ev_records) > 3:
                         text += f"• ...and {len(ev_records) - 3} more tiers\n"
                     text += "\n"

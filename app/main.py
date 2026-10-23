@@ -18,6 +18,9 @@ from app.agent.permissions import gatekeeper
 from app.agent.router import AgentRouter
 from app.core.db_security import DatabaseSecurityEngine
 from app.core.event_db import DB_PATH
+from init_event_db import ensure_india_demo_database
+
+ensure_india_demo_database()
 
 # Initialize core services
 vector_store = HybridVectorStore()
@@ -25,9 +28,9 @@ llm_client = LocalLLMClient()
 router = AgentRouter(vector_store, llm_client)
 
 app = FastAPI(
-    title="Privacy-First Agentic RAG Chatbot",
-    description="Local RAG chatbot and permission-governed AI agent running open-source models with strict DB access control.",
-    version="1.0.0"
+    title="Chartbot",
+    description="Local India event assistant with live ticket, seat, schedule, venue, and event-link data.",
+    version="2.0.0"
 )
 
 # CORS configuration
@@ -122,8 +125,68 @@ def list_events() -> List[Dict[str, Any]]:
     if not DB_PATH.exists():
         return []
     res = DatabaseSecurityEngine.execute_safe_query(
-        DB_PATH, 
-        "SELECT event_id, name, category, description, organizer FROM events ORDER BY event_id"
+        DB_PATH,
+        """
+        SELECT e.event_id, e.name, e.category, e.description, e.organizer,
+               l.city, l.state, l.country, l.venue_name, s.event_date
+        FROM events e
+        JOIN event_schedules s ON e.event_id = s.event_id
+        JOIN event_locations l ON s.location_id = l.location_id
+        ORDER BY e.event_id, s.event_date
+        """
+    )
+    return res.get("data", [])
+
+@app.get("/api/seats-page")
+def get_seats_page(event_id: int, schedule_id: int) -> Dict[str, Any]:
+    """Return public event, ticket availability, and seat details for the local demo booking view."""
+    if event_id <= 0 or schedule_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid event or schedule.")
+    event = DatabaseSecurityEngine.execute_safe_query(
+        DB_PATH,
+        f"""SELECT e.event_id, e.name, e.category, s.schedule_id, s.event_date,
+                   s.start_time, s.end_time, l.venue_name, l.city, l.state
+            FROM events e
+            JOIN event_schedules s ON e.event_id = s.event_id
+            JOIN event_locations l ON s.location_id = l.location_id
+            WHERE e.event_id = {event_id} AND s.schedule_id = {schedule_id}
+            LIMIT 1"""
+    ).get("data", [])
+    if not event:
+        raise HTTPException(status_code=404, detail="Event session not found.")
+    tickets = DatabaseSecurityEngine.execute_safe_query(
+        DB_PATH,
+        f"""SELECT t.ticket_id, t.tier_name, t.price, t.currency, t.perks,
+                   a.tickets_available, a.status
+            FROM tickets t
+            JOIN availability a ON t.ticket_id = a.ticket_id
+            WHERE t.schedule_id = {schedule_id}
+            ORDER BY t.price LIMIT 25"""
+    ).get("data", [])
+    seats = DatabaseSecurityEngine.execute_safe_query(
+        DB_PATH,
+        f"""SELECT seat_code, section, row_num, seat_number, tier_name, is_accessible
+            FROM seats WHERE schedule_id = {schedule_id}
+            ORDER BY section, seat_number LIMIT 250"""
+    ).get("data", [])
+    return {"event": event[0], "tickets": tickets, "seats": seats}
+@app.get("/api/seats")
+def list_seats() -> List[Dict[str, Any]]:
+    """Returns public seat codes for the demo events (whitelisted columns only)."""
+    if not DB_PATH.exists():
+        return []
+    res = DatabaseSecurityEngine.execute_safe_query(
+        DB_PATH,
+        """
+        SELECT e.name AS event_name, l.city, l.venue_name, st.seat_code, st.section,
+               st.row_num, st.seat_number, st.tier_name, st.is_accessible
+        FROM seats st
+        JOIN event_schedules s ON st.schedule_id = s.schedule_id
+        JOIN events e ON s.event_id = e.event_id
+        JOIN event_locations l ON st.location_id = l.location_id
+        ORDER BY e.name, st.section, st.seat_number
+         LIMIT 250
+        """
     )
     return res.get("data", [])
 
@@ -162,7 +225,7 @@ def get_database_schema() -> Dict[str, Any]:
         "whitelisted_tables": {tbl: sorted(list(cols)) for tbl, cols in DatabaseSecurityEngine.ALLOWED_TABLES.items()},
         "restricted_tables": sorted(list(DatabaseSecurityEngine.FORBIDDEN_TABLES)),
         "restricted_columns": sorted(list(DatabaseSecurityEngine.FORBIDDEN_COLUMNS)),
-        "enforcement_layer": "Backend Python AST & Read-Only SQLite Engine"
+        "enforcement_layer": "SQLite Authorizer + Read-Only Connection + Backend Table/Column Whitelist"
     }
 
 @app.post("/api/chat")
@@ -273,6 +336,10 @@ if not FRONTEND_DIR.exists():
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
+@app.get("/seats")
+def serve_seats_page():
+    """Serve the local demo ticket and seat details view."""
+    return FileResponse(FRONTEND_DIR / "index.html")
 @app.get("/")
 def serve_index():
     index_file = FRONTEND_DIR / "index.html"

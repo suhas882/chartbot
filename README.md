@@ -1,7 +1,6 @@
-# Agentic RAG Chatbot with Strict Backend Access Control & Event Database
+# Chartbot — India Event & Ticket Assistant
 
-> **Privacy-First AI Agent & Relational Event Query System**  
-> Connects natural-language questions to relational databases and document collections with strict backend-enforced access control, zero external cloud dependencies, and direct interactive action links.
+> A local FastAPI prototype for natural-language questions about events, tickets, seat details, schedules, Indian venues, and booking links. Ollama with the configured Llama model interprets and phrases queries; SQLite supplies the event facts.
 
 ---
 
@@ -10,19 +9,17 @@
 1. **Natural-Language Relational Event Queries**:
    - Query event dates, venues, organizers, descriptions, and ticket categories.
    - Real-time seat inventory checks (VIP, General, Balcony) with exact seat codes (e.g., `A-101`, `V-01`).
-   - Multi-location detection (e.g., comparing occurrences of the same event across San Francisco and New York).
+   - Multi-location detection for events scheduled in more than one Indian city.
    - Direct, clickable booking and official event links rendered automatically in chat.
 
 2. **Strict Backend Access Control Engine**:
-   - **AST / Token Validation**: Enforces single read-only `SELECT` statements; rejects semicolons, comments, and all mutating operations (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `ATTACH`, `PRAGMA`).
-   - **Schema Whitelist**: Strict table and column whitelist enforcement. Even if an LLM is prompt-injected or asked for restricted data, the Python backend layer refuses execution before reaching the database.
-   - **Restricted Tables Blocklist**: Completely blocks internal tables (`customer_bookings`, `financial_transactions`, `admin_credentials`, `venue_alarm_codes`).
-   - **Restricted Columns Blocklist**: Blocks sensitive columns (`credit_card_hash`, `internal_production_cost`, `profit_margin_target`, `organizer_bank_account`).
-   - **Read-Only SQLite URI**: Database connections are opened using SQLite's read-only URI mode (`?mode=ro`).
+    - The LLM never writes SQL. A backend query planner builds fixed read queries from recognized event intents.
+    - A SQLite authorizer checks physical table and column reads against the public event schema at execution time.
+    - Connections use SQLite read-only mode; the demo database stores no customer, payment, credential, or internal finance tables.
 
 3. **Privacy-First Hybrid RAG (Retrieval-Augmented Generation)**:
-   - Indexes PDF, TXT, MD, and DOCX files into local ChromaDB with ONNX / PyTorch embeddings.
-   - 100% on-premises / local execution using Ollama (`llama3.2:3b`, `mistral`). No data sent to third-party cloud APIs.
+   - Optional document retrieval uses local ChromaDB for PDF, TXT, MD, and DOCX files.
+   - Event queries use only the configured Ollama model (default `llama3.2:3b`); deterministic database answers remain available when Ollama is unavailable.
 
 4. **Human-in-the-Loop Governance & Ticket Approval**:
    - High-privilege agent actions (file system writes, external notifications) require human ticket approval.
@@ -62,7 +59,7 @@
 │     Database Security Engine           │
 │     (app/core/db_security.py)          │
 │  - Whitelist: events, tickets, etc.    │
-│  - Blocks: financial_transactions, etc.│
+│  - Only the seven public event tables   │
 │  - SQLite URI: ?mode=ro (Read-Only)    │
 └──────────────┬─────────────────────────┘
                │
@@ -81,16 +78,13 @@ The SQLite database (`data/events.db`) contains 7 interrelated tables with stric
 
 | Table | Purpose | Access Control Status |
 |---|---|---|
-| `events` | Event titles, categories, descriptions, organizers | ✅ Public Whitelist (internal costs restricted) |
-| `event_locations` | Venues, addresses, cities, capacities | ✅ Public Whitelist (alarm codes restricted) |
+| `events` | Event titles, categories, descriptions, organizers | ✅ Public Whitelist |
+| `event_locations` | Indian venues, addresses, cities, capacities | ✅ Public Whitelist; country is constrained to India |
 | `event_schedules` | Start/end dates, doors open, timezones | ✅ Public Whitelist |
 | `tickets` | Ticket tiers, names, pricing | ✅ Public Whitelist |
 | `seats` | Seat codes (`A-101`), sections, accessibility | ✅ Public Whitelist |
-| `availability` | Real-time seat status (`AVAILABLE`, `BOOKED`) | ✅ Public Whitelist |
+| `availability` | Ticket allocation, sold count, remaining count, status | ✅ Public Whitelist |
 | `event_urls` | Official event links, registration URLs | ✅ Public Whitelist |
-| `customer_bookings` | User booking records, payment statuses | 🛑 **STRICTLY FORBIDDEN / BLOCKED** |
-| `financial_transactions` | Revenue, payment gateways, credit card hashes | 🛑 **STRICTLY FORBIDDEN / BLOCKED** |
-| `admin_credentials` | Password hashes, API keys, admin session tokens | 🛑 **STRICTLY FORBIDDEN / BLOCKED** |
 
 ---
 
@@ -123,12 +117,17 @@ The SQLite database (`data/events.db`) contains 7 interrelated tables with stric
    python init_event_db.py
    ```
 
-5. **Start the FastAPI server**:
+5. **Install the configured Llama model in Ollama** (once):
+   ```bash
+   ollama pull llama3.2:3b
+   ```
+
+6. **Start the FastAPI server**:
    ```bash
    uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
    ```
 
-6. Open `http://127.0.0.1:8000` in your web browser.
+7. Open `http://127.0.0.1:8000` in your web browser.
 
 ---
 
@@ -157,15 +156,15 @@ Access the application at `http://localhost:8000`.
 
 ### 2. Multi-Location Event Detection
 - *"Is the AI Summit happening in two different locations?"*
-  - **Output**: Detects San Francisco (Moscone Center) on 2026-11-15 and New York City (Javits Center) on 2026-12-05 with dates and venue details.
+  - **Output**: Lists the Bengaluru and Hyderabad editions with their dates and venues.
 
 ### 3. Ticket Pricing & Availability
 - *"Are there tickets available for the Cybersecurity Con?"*
 - *"What is the cheapest ticket for the Indie Music Fest?"*
 
 ### 4. Seat Details & Codes
-- *"What are the seat codes for the AI Summit in San Francisco?"*
-  - **Output**: Returns specific seat codes (e.g., `A-101`, `A-102`, `B-201`), seat tiers, and availability.
+- *"What are the seat codes for the AI Summit in Bengaluru?"*
+  - **Output**: Returns seat codes with section, row, seat number, tier, and accessibility details.
 
 ### 5. Clickable Event URLs
 - *"Give me the booking link for DevFest 2026."*
@@ -179,10 +178,10 @@ Access the application at `http://localhost:8000`.
 
 ## 🔒 Security Architecture Highlights
 
-1. **Defense-in-Depth**: Security is enforced at the Python execution boundary, independent of LLM prompts.
-2. **SQL Injection Proof**: Parameterized or tightly constructed queries validated by token analyzers.
-3. **No Execution of DDL/DML**: Any query containing `UPDATE`, `INSERT`, `DELETE`, `DROP`, `ALTER`, or `PRAGMA` is immediately rejected.
-4. **Read-Only SQLite URI**: `file:events.db?mode=ro` prevents disk writes even if SQL syntax validation were bypassed.
+1. **Defense-in-Depth**: Query construction and database authorization are backend controlled, independent of LLM prompts.
+2. **Physical Read Authorization**: SQLite checks actual table and column reads, including aliases and `SELECT *`.
+3. **Read-Only SQLite URI**: Chat queries connect with `mode=ro`; SQLite denies mutations.
+4. **Minimal Demo Schema**: The database contains only the seven public event tables; private data is not seeded.
 
 ---
 
@@ -195,10 +194,10 @@ chartbot/
 │   │   ├── permissions.py        # Human-in-the-loop gatekeeper
 │   │   └── router.py             # Query classifier & intent routing
 │   ├── core/
-│   │   ├── db_security.py        # Strict SQL parsing, AST & whitelist enforcement
+│   │   ├── db_security.py        # SQLite authorizer and whitelist enforcement
 │   │   ├── event_db.py           # NLP to safe SQL engine & query planner
 │   │   ├── ingestion.py         # Document parsing (PDF, TXT, MD, DOCX)
-│   │   ├── llm.py                # Local Ollama client with fallback
+│   │   ├── llm.py                # Configured Ollama Llama client
 │   │   └── vector_store.py       # ChromaDB local vector embeddings
 │   ├── config.py                 # System paths and constants
 │   └── main.py                   # FastAPI server & endpoints

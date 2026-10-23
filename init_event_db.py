@@ -1,6 +1,6 @@
 """
-Seeds the demo relational database 'data/events.db' with events, tickets,
-seats, locations, dates, availability, event URLs, and restricted tables for access control testing.
+Seeds the demo relational database 'data/events.db' with India-based events,
+    tickets, seats, locations, dates, availability, and event URLs.
 """
 
 import sqlite3
@@ -9,6 +9,7 @@ from app.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "events.db"
 
+
 def init_database():
     if DB_PATH.exists():
         DB_PATH.unlink()
@@ -16,22 +17,16 @@ def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # 1. Events Table (Includes public columns and restricted internal columns)
     cursor.execute("""
     CREATE TABLE events (
         event_id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         category TEXT NOT NULL,
         description TEXT,
-        organizer TEXT NOT NULL,
-        -- RESTRICTED COLUMNS (Internal only)
-        internal_production_cost REAL,
-        profit_margin_target REAL,
-        organizer_bank_account TEXT
+        organizer TEXT NOT NULL
     )
     """)
 
-    # 2. Event Locations Table
     cursor.execute("""
     CREATE TABLE event_locations (
         location_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,21 +34,19 @@ def init_database():
         address TEXT NOT NULL,
         city TEXT NOT NULL,
         state TEXT NOT NULL,
+        country TEXT NOT NULL DEFAULT 'India',
         postal_code TEXT,
         capacity INTEGER NOT NULL,
-        -- RESTRICTED COLUMNS
-        venue_security_alarm_code TEXT,
-        manager_private_phone TEXT
+        CHECK (country = 'India')
     )
     """)
 
-    # 3. Event Schedules (Dates & Times)
     cursor.execute("""
     CREATE TABLE event_schedules (
         schedule_id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL,
         location_id INTEGER NOT NULL,
-        event_date TEXT NOT NULL,  -- YYYY-MM-DD
+        event_date TEXT NOT NULL,
         start_time TEXT NOT NULL,
         end_time TEXT NOT NULL,
         doors_open TEXT,
@@ -63,23 +56,18 @@ def init_database():
     )
     """)
 
-    # 4. Tickets (Tiers & Pricing)
     cursor.execute("""
     CREATE TABLE tickets (
         ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
         schedule_id INTEGER NOT NULL,
         tier_name TEXT NOT NULL,
         price REAL NOT NULL,
-        currency TEXT DEFAULT 'USD',
+        currency TEXT DEFAULT 'INR',
         perks TEXT,
-        -- RESTRICTED COLUMNS
-        internal_markup_rate REAL,
-        merchant_fee_cut REAL,
         FOREIGN KEY (schedule_id) REFERENCES event_schedules(schedule_id)
     )
     """)
 
-    # 5. Seats (Seat details, codes, sections)
     cursor.execute("""
     CREATE TABLE seats (
         seat_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,15 +79,11 @@ def init_database():
         seat_number INTEGER NOT NULL,
         tier_name TEXT NOT NULL,
         is_accessible INTEGER DEFAULT 0,
-        -- RESTRICTED COLUMNS
-        vip_security_notes TEXT,
-        escort_officer_id TEXT,
         FOREIGN KEY (location_id) REFERENCES event_locations(location_id),
         FOREIGN KEY (schedule_id) REFERENCES event_schedules(schedule_id)
     )
     """)
 
-    # 6. Availability (Live Inventory)
     cursor.execute("""
     CREATE TABLE availability (
         availability_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,23 +92,19 @@ def init_database():
         total_allocated INTEGER NOT NULL,
         tickets_sold INTEGER NOT NULL,
         tickets_available INTEGER NOT NULL,
-        status TEXT NOT NULL, -- 'AVAILABLE', 'LIMITED', 'SOLD_OUT'
+        status TEXT NOT NULL,
         last_updated TEXT NOT NULL,
-        -- RESTRICTED COLUMNS
-        reserve_override_pin TEXT,
-        broker_allocation_ratio REAL,
         FOREIGN KEY (schedule_id) REFERENCES event_schedules(schedule_id),
         FOREIGN KEY (ticket_id) REFERENCES tickets(ticket_id)
     )
     """)
 
-    # 7. Event URLs (Clickable links)
     cursor.execute("""
     CREATE TABLE event_urls (
         url_id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL,
         schedule_id INTEGER,
-        url_type TEXT NOT NULL, -- 'ticket_booking', 'official_site', 'venue_map', 'schedule_info'
+        url_type TEXT NOT NULL,
         url TEXT NOT NULL,
         label TEXT NOT NULL,
         FOREIGN KEY (event_id) REFERENCES events(event_id),
@@ -132,216 +112,184 @@ def init_database():
     )
     """)
 
-    # 8. RESTRICTED TABLE: Customer Bookings (Zero access to Chatbot)
-    cursor.execute("""
-    CREATE TABLE customer_bookings (
-        booking_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id INTEGER,
-        customer_name TEXT,
-        customer_email TEXT,
-        credit_card_hash TEXT,
-        amount_paid REAL,
-        billing_address TEXT
-    )
-    """)
-
-    # 9. RESTRICTED TABLE: Financial Transactions (Zero access to Chatbot)
-    cursor.execute("""
-    CREATE TABLE financial_transactions (
-        transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id INTEGER,
-        revenue REAL,
-        net_profit REAL,
-        bank_wire_routing TEXT
-    )
-    """)
-
-    # 10. RESTRICTED TABLE: Admin Credentials (Zero access to Chatbot)
-    cursor.execute("""
-    CREATE TABLE admin_credentials (
-        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        password_hash TEXT,
-        api_secret_key TEXT
-    )
-    """)
-
-    # ==================== SEED DATA ====================
-
-    # Insert Events
     cursor.executemany("""
-    INSERT INTO events (event_id, name, category, description, organizer, internal_production_cost, profit_margin_target, organizer_bank_account)
+    INSERT INTO events (event_id, name, category, description, organizer)
+    VALUES (?, ?, ?, ?, ?)
+    """, [
+        (1, "Global AI & Tech Summit 2026", "Technology", "Premier conference uniting Indian enterprise AI leaders, generative agents, and machine learning researchers.", "OpenTech India Alliance"),
+        (2, "Neon Nights Music & Jazz Festival", "Music & Arts", "Three days of jazz fusion, soul, and contemporary rhythm at Jio World Garden.", "Starline Entertainment India"),
+        (3, "Cybersecurity & Cloud Defense Expo", "Technology", "National summit on zero-trust architecture, threat hunting, and infrastructure protection.", "CyberGuard Institute India"),
+        (4, "World Symphony Gala", "Classical Music", "The Madras Philharmonic performing Beethoven, Brahms, and contemporary concertos.", "Symphonic Arts Foundation"),
+        (5, "International Culinary & Wine Expo", "Food & Hospitality", "Tasting pavilion, masterclasses from Indian and international chefs, and vineyard showcases in Goa.", "Epicurean Guild India"),
+    ])
+
+    cursor.executemany("""
+    INSERT INTO event_locations (location_id, venue_name, address, city, state, country, postal_code, capacity)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, [
-        (1, "Global AI & Tech Summit 2026", "Technology", "Premier international conference uniting enterprise AI leaders, generative agents, and machine learning researchers.", "OpenTech Global Alliance", 285000.00, 0.45, "CHASE-99384-CONFIDENTIAL"),
-        (2, "Neon Nights Music & Jazz Festival", "Music & Arts", "Three days of electrifying jazz fusion, soul, and contemporary rhythm under the stars.", "Starline Entertainment", 120000.00, 0.38, "WF-44120-CONFIDENTIAL"),
-        (3, "Cybersecurity & Cloud Defense Expo", "Technology", "Global summit on zero-trust architecture, threat hunting, and infrastructure protection.", "CyberGuard Institute", 95000.00, 0.50, "CITI-88219-CONFIDENTIAL"),
-        (4, "World Symphony Gala", "Classical Music", "Acclaimed national philharmonic performing masterworks of Beethoven, Brahms, and contemporary concertos.", "Symphonic Arts Foundation", 75000.00, 0.25, "BOA-11029-CONFIDENTIAL"),
-        (5, "International Culinary & Wine Expo", "Food & Hospitality", "Exclusive tasting pavilion, masterclasses from Michelin-starred chefs, and artisanal vineyard showcases.", "Epicurean Guild", 65000.00, 0.40, "US-55410-CONFIDENTIAL")
+        (1, "Bangalore International Exhibition Centre", "10th Mile, Tumkur Road, Madavara", "Bengaluru", "Karnataka", "India", "562123", 15000),
+        (2, "HITEX Exhibition Centre", "Izzat Nagar, Madhapur", "Hyderabad", "Telangana", "India", "500084", 12000),
+        (3, "Jio World Garden", "G Block, Bandra Kurla Complex", "Mumbai", "Maharashtra", "India", "400051", 8000),
+        (4, "India Expo Centre & Mart", "Knowledge Park II, Greater Noida", "New Delhi", "Delhi", "India", "201306", 20000),
+        (5, "The Music Academy Madras", "168 TTK Road, Royapettah", "Chennai", "Tamil Nadu", "India", "600014", 1600),
+        (6, "Kala Academy Goa", "Campal, Panaji", "Goa", "Goa", "India", "403001", 3500),
     ])
 
-    # Insert Locations
-    cursor.executemany("""
-    INSERT INTO event_locations (location_id, venue_name, address, city, state, postal_code, capacity, venue_security_alarm_code, manager_private_phone)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [
-        (1, "Moscone Center West", "747 Howard St", "San Francisco", "CA", "94103", 15000, "SEC-SF-9011*", "+1-415-555-0199"),
-        (2, "Javits Convention Center", "429 11th Ave", "New York", "NY", "10001", 18000, "SEC-NY-8422*", "+1-212-555-0144"),
-        (3, "Moody Amphitheater at Waterloo Park", "1401 Trinity St", "Austin", "TX", "78701", 5000, "SEC-TX-7103*", "+1-512-555-0182"),
-        (4, "McCormick Place Lakeside Center", "2301 S Lake Shore Dr", "Chicago", "IL", "60616", 20000, "SEC-CHI-5521*", "+1-312-555-0167"),
-        (5, "Boston Symphony Hall", "301 Massachusetts Ave", "Boston", "MA", "02115", 2600, "SEC-BOS-3319*", "+1-617-555-0125")
-    ])
-
-    # Insert Schedules (Notice Event #1 is held at TWO DIFFERENT LOCATIONS: SF and New York!)
     cursor.executemany("""
     INSERT INTO event_schedules (schedule_id, event_id, location_id, event_date, start_time, end_time, doors_open, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, [
-        # Global AI & Tech Summit - San Francisco Edition
         (1, 1, 1, "2026-11-15", "09:00 AM", "06:00 PM", "08:00 AM", "SCHEDULED"),
-        # Global AI & Tech Summit - New York Edition
         (2, 1, 2, "2026-12-05", "09:00 AM", "06:00 PM", "08:00 AM", "SCHEDULED"),
-        # Neon Nights Music Festival - Austin
         (3, 2, 3, "2026-11-20", "05:00 PM", "11:30 PM", "04:00 PM", "SCHEDULED"),
-        # Cybersecurity Expo - Chicago
         (4, 3, 4, "2026-11-28", "08:30 AM", "05:00 PM", "07:30 AM", "SCHEDULED"),
-        # World Symphony Gala - Boston
-        (5, 4, 5, "2026-12-18", "07:30 PM", "10:15 PM", "06:45 PM", "SCHEDULED")
+        (5, 4, 5, "2026-12-18", "07:30 PM", "10:15 PM", "06:45 PM", "SCHEDULED"),
+        (6, 5, 6, "2026-12-12", "11:00 AM", "08:00 PM", "10:00 AM", "SCHEDULED"),
     ])
 
-    # Insert Tickets
     cursor.executemany("""
-    INSERT INTO tickets (ticket_id, schedule_id, tier_name, price, currency, perks, internal_markup_rate, merchant_fee_cut)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tickets (ticket_id, schedule_id, tier_name, price, currency, perks)
+    VALUES (?, ?, ?, ?, ?, ?)
     """, [
-        # AI Summit (SF)
-        (1, 1, "All-Access VIP Pass", 899.00, "USD", "Keynotes, VIP Lounge, Speaker Dinners, Workshop Recordings", 0.15, 0.03),
-        (2, 1, "Standard Conference Pass", 449.00, "USD", "Full Expo access, Keynote Hall, Networking sessions", 0.12, 0.03),
-        (3, 1, "Virtual Livestream Pass", 149.00, "USD", "Interactive live broadcast & Q&A stream access", 0.05, 0.02),
-        
-        # AI Summit (NYC)
-        (4, 2, "All-Access VIP Pass", 949.00, "USD", "Keynotes, Manhattan Rooftop Mixer, Workshop Labs", 0.15, 0.03),
-        (5, 2, "Standard Conference Pass", 499.00, "USD", "Full Expo access, Keynote Hall, Tech Stage", 0.12, 0.03),
-
-        # Neon Nights (Austin)
-        (6, 3, "VIP Front Row Lounge", 185.00, "USD", "Reserved front-stage seating, complimentary craft cocktails, private bar", 0.18, 0.035),
-        (7, 3, "General Lawn Admission", 65.00, "USD", "Open amphitheater lawn access, festival food court", 0.10, 0.03),
-        (8, 3, "Backstage Artist Pass", 350.00, "USD", "Artist meet-and-greet, backstage hospitality terrace", 0.20, 0.04),
-
-        # Cybersecurity Expo (Chicago)
-        (9, 4, "Executive Security Pass", 399.00, "USD", "CISO roundtables, hands-on red team labs, banquet lunch", 0.14, 0.03),
-        (10, 4, "Standard Expo Pass", 199.00, "USD", "Vendor hall, keynote stages, career hub", 0.10, 0.03),
-
-        # Symphony Gala (Boston)
-        (11, 5, "Orchestra Front Center", 160.00, "USD", "Prime acoustic center seating, champagne reception", 0.15, 0.03),
-        (12, 5, "Balcony Tier Center", 85.00, "USD", "Elevated panoramic acoustics and stage visibility", 0.10, 0.03)
+        (1, 1, "All-Access VIP Pass", 74999.00, "INR", "Keynotes, VIP Lounge, Speaker Dinners, Workshop Recordings"),
+        (2, 1, "Standard Conference Pass", 24999.00, "INR", "Full Expo access, Keynote Hall, Networking sessions"),
+        (3, 1, "Virtual Livestream Pass", 4999.00, "INR", "Interactive live broadcast and Q&A stream access"),
+        (4, 2, "All-Access VIP Pass", 69999.00, "INR", "Keynotes, Hyderabad Mixer, Workshop Labs"),
+        (5, 2, "Standard Conference Pass", 22999.00, "INR", "Full Expo access, Keynote Hall, Tech Stage"),
+        (6, 3, "VIP Front Row Lounge", 8999.00, "INR", "Reserved front-stage seating, complimentary beverages, private bar"),
+        (7, 3, "General Lawn Admission", 2499.00, "INR", "Open garden access, festival food court"),
+        (8, 3, "Backstage Artist Pass", 14999.00, "INR", "Artist meet-and-greet, backstage hospitality terrace"),
+        (9, 4, "Executive Security Pass", 18999.00, "INR", "CISO roundtables, hands-on red team labs, banquet lunch"),
+        (10, 4, "Standard Expo Pass", 7999.00, "INR", "Vendor hall, keynote stages, career hub"),
+        (11, 5, "Orchestra Front Center", 6500.00, "INR", "Prime acoustic center seating, reception"),
+        (12, 5, "Balcony Tier Center", 3200.00, "INR", "Elevated panoramic acoustics and stage visibility"),
+        (13, 6, "Chef Table Experience", 12999.00, "INR", "Chef table seating, paired tastings, masterclass"),
+        (14, 6, "General Tasting Pass", 3999.00, "INR", "Pavilion tastings and public demos"),
     ])
 
-    # Insert Seats
+    def _seats(location_id, schedule_id, prefix, section, row, count, tier, accessible_count=2):
+        rows = []
+        for i in range(1, count + 1):
+            rows.append((
+                location_id,
+                schedule_id,
+                f"{prefix}-{i:02d}",
+                section,
+                row,
+                i,
+                tier,
+                1 if i <= accessible_count else 0,
+            ))
+        return rows
+
     seats_data = []
-    # AI Summit SF Keynote Seats
-    for i in range(1, 11):
-        seats_data.append((len(seats_data) + 1, 1, 1, f"SF-VIP-{i:02d}", "Grand Ballroom VIP", "Row-A", i, "All-Access VIP Pass", 1, "Executive seating tag", "OFF-99"))
-    for i in range(1, 21):
-        seats_data.append((len(seats_data) + 1, 1, 1, f"SF-STD-{i:02d}", "Keynote Main Hall", "Row-C", i, "Standard Conference Pass", 0, None, None))
-
-    # Neon Nights Austin Seats
-    for i in range(1, 9):
-        seats_data.append((len(seats_data) + 1, 3, 3, f"NN-VIP-{i:02d}", "Front Terrace Lounge", "Row-1", i, "VIP Front Row Lounge", 1, "Direct stage view", "OFF-42"))
-    for i in range(101, 116):
-        seats_data.append((len(seats_data) + 1, 3, 3, f"NN-LAWN-{i}", "Amphitheater Lawn East", "Zone-B", i - 100, "General Lawn Admission", 0, None, None))
-
-    # Symphony Gala Boston Seats
-    for i in range(1, 13):
-        seats_data.append((len(seats_data) + 1, 5, 5, f"BOS-ORCH-A{i}", "Orchestra Hall Center", "Row-A", i, "Orchestra Front Center", 1, "Reserved patron seating", "OFF-11"))
-    for i in range(1, 16):
-        seats_data.append((len(seats_data) + 1, 5, 5, f"BOS-BALC-C{i}", "Balcony Tier Center", "Row-C", i, "Balcony Tier Center", 0, None, None))
+    seats_data += _seats(1, 1, "BLR-VIP-A", "Grand Hall VIP", "Row-A", 10, "All-Access VIP Pass", 3)
+    seats_data += _seats(1, 1, "BLR-STD-C", "Keynote Main Hall", "Row-C", 16, "Standard Conference Pass", 2)
+    seats_data += _seats(2, 2, "HYD-VIP-A", "HITEX VIP Gallery", "Row-A", 10, "All-Access VIP Pass", 2)
+    seats_data += _seats(2, 2, "HYD-STD-B", "HITEX Main Arena", "Row-B", 14, "Standard Conference Pass", 2)
+    seats_data += _seats(3, 3, "MUM-VIP-1", "Front Terrace Lounge", "Row-1", 8, "VIP Front Row Lounge", 2)
+    seats_data += _seats(3, 3, "MUM-LAWN-B", "Garden Lawn East", "Zone-B", 15, "General Lawn Admission", 1)
+    seats_data += _seats(4, 4, "DEL-EXE-A", "Executive Briefing Hall", "Row-A", 12, "Executive Security Pass", 2)
+    seats_data += _seats(4, 4, "DEL-STD-D", "Expo Floor Seating", "Row-D", 16, "Standard Expo Pass", 2)
+    seats_data += _seats(5, 5, "CHN-ORCH-A", "Orchestra Hall Center", "Row-A", 12, "Orchestra Front Center", 3)
+    seats_data += _seats(5, 5, "CHN-BALC-C", "Balcony Tier Center", "Row-C", 14, "Balcony Tier Center", 1)
+    seats_data += _seats(6, 6, "GOA-CHEF-A", "Chef Table Pavilion", "Row-A", 8, "Chef Table Experience", 2)
+    seats_data += _seats(6, 6, "GOA-TASTE-C", "Tasting Court", "Row-C", 16, "General Tasting Pass", 2)
 
     cursor.executemany("""
-    INSERT INTO seats (seat_id, location_id, schedule_id, seat_code, section, row_num, seat_number, tier_name, is_accessible, vip_security_notes, escort_officer_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO seats (location_id, schedule_id, seat_code, section, row_num, seat_number, tier_name, is_accessible)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, seats_data)
 
-    # Insert Availability
     cursor.executemany("""
-    INSERT INTO availability (availability_id, schedule_id, ticket_id, total_allocated, tickets_sold, tickets_available, status, last_updated, reserve_override_pin, broker_allocation_ratio)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO availability (availability_id, schedule_id, ticket_id, total_allocated, tickets_sold, tickets_available, status, last_updated)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, [
-        # AI Summit SF
-        (1, 1, 1, 150, 138, 12, "LIMITED", "2026-10-23 09:30:00", "PIN-8812", 0.05),
-        (2, 1, 2, 800, 520, 280, "AVAILABLE", "2026-10-23 09:30:00", "PIN-8812", 0.10),
-        (3, 1, 3, 2000, 850, 1150, "AVAILABLE", "2026-10-23 09:30:00", "PIN-8812", 0.00),
-
-        # AI Summit NYC
-        (4, 2, 4, 200, 165, 35, "AVAILABLE", "2026-10-23 09:30:00", "PIN-9921", 0.05),
-        (5, 2, 5, 1000, 710, 290, "AVAILABLE", "2026-10-23 09:30:00", "PIN-9921", 0.10),
-
-        # Neon Nights Austin
-        (6, 3, 6, 80, 72, 8, "LIMITED", "2026-10-23 09:30:00", "PIN-3301", 0.08),
-        (7, 3, 7, 1200, 940, 260, "AVAILABLE", "2026-10-23 09:30:00", "PIN-3301", 0.10),
-        (8, 3, 8, 25, 25, 0, "SOLD_OUT", "2026-10-23 09:30:00", "PIN-3301", 0.00),
-
-        # Cybersecurity Expo Chicago
-        (9, 4, 9, 300, 245, 55, "AVAILABLE", "2026-10-23 09:30:00", "PIN-4419", 0.05),
-        (10, 4, 10, 1500, 1100, 400, "AVAILABLE", "2026-10-23 09:30:00", "PIN-4419", 0.05),
-
-        # Symphony Gala Boston
-        (11, 5, 11, 120, 114, 6, "LIMITED", "2026-10-23 09:30:00", "PIN-1102", 0.02),
-        (12, 5, 12, 450, 310, 140, "AVAILABLE", "2026-10-23 09:30:00", "PIN-1102", 0.05)
+        (1, 1, 1, 150, 138, 12, "LIMITED", "2026-10-23 09:30:00"),
+        (2, 1, 2, 800, 520, 280, "AVAILABLE", "2026-10-23 09:30:00"),
+        (3, 1, 3, 2000, 850, 1150, "AVAILABLE", "2026-10-23 09:30:00"),
+        (4, 2, 4, 200, 165, 35, "AVAILABLE", "2026-10-23 09:30:00"),
+        (5, 2, 5, 1000, 710, 290, "AVAILABLE", "2026-10-23 09:30:00"),
+        (6, 3, 6, 80, 72, 8, "LIMITED", "2026-10-23 09:30:00"),
+        (7, 3, 7, 1200, 940, 260, "AVAILABLE", "2026-10-23 09:30:00"),
+        (8, 3, 8, 25, 25, 0, "SOLD_OUT", "2026-10-23 09:30:00"),
+        (9, 4, 9, 300, 245, 55, "AVAILABLE", "2026-10-23 09:30:00"),
+        (10, 4, 10, 1500, 1100, 400, "AVAILABLE", "2026-10-23 09:30:00"),
+        (11, 5, 11, 120, 114, 6, "LIMITED", "2026-10-23 09:30:00"),
+        (12, 5, 12, 450, 310, 140, "AVAILABLE", "2026-10-23 09:30:00"),
+        (13, 6, 13, 40, 31, 9, "LIMITED", "2026-10-23 09:30:00"),
+        (14, 6, 14, 600, 220, 380, "AVAILABLE", "2026-10-23 09:30:00"),
     ])
 
-    # Insert Event URLs (Clickable links for answers!)
     cursor.executemany("""
     INSERT INTO event_urls (url_id, event_id, schedule_id, url_type, url, label)
     VALUES (?, ?, ?, ?, ?, ?)
     """, [
-        # AI Summit SF
-        (1, 1, 1, "ticket_booking", "https://events.example.com/ai-summit-2026-sf/tickets", "Book AI Summit (San Francisco) Tickets"),
-        (2, 1, 1, "official_site", "https://events.example.com/ai-summit-2026-sf", "Official AI Summit SF Portal"),
-        # AI Summit NYC
-        (3, 1, 2, "ticket_booking", "https://events.example.com/ai-summit-2026-nyc/tickets", "Book AI Summit (New York) Tickets"),
-        (4, 1, 2, "official_site", "https://events.example.com/ai-summit-2026-nyc", "Official AI Summit NYC Portal"),
-        # Neon Nights
-        (5, 2, 3, "ticket_booking", "https://events.example.com/neon-nights-jazz-austin/tickets", "Book Neon Nights Jazz Festival Tickets"),
-        (6, 2, 3, "venue_map", "https://events.example.com/neon-nights-jazz-austin/seat-map", "View Amphitheater Seat Map"),
-        # Cybersecurity Expo
-        (7, 3, 4, "ticket_booking", "https://events.example.com/cyber-defense-expo-2026/register", "Register for Cybersecurity & Cloud Defense Expo"),
-        (8, 3, 4, "schedule_info", "https://events.example.com/cyber-defense-expo-2026/agenda", "Cyber Defense Expo Full Agenda"),
-        # Symphony Gala
-        (9, 4, 5, "ticket_booking", "https://events.example.com/world-symphony-gala-boston/seats", "Reserve World Symphony Gala Seats"),
-        (10, 4, 5, "official_site", "https://events.example.com/world-symphony-gala-boston", "World Symphony Gala Program & Details")
-    ])
-
-    # Insert Restricted Dummy Data (For security testing)
-    cursor.executemany("""
-    INSERT INTO customer_bookings (booking_id, event_id, customer_name, customer_email, credit_card_hash, amount_paid, billing_address)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, [
-        (1001, 1, "Alice Morgan", "alice.morgan@corp-enterprise.net", "4111-XXXX-XXXX-9921", 899.00, "123 Market St, San Francisco, CA"),
-        (1002, 2, "David Miller", "david.m@austin-music.org", "5500-XXXX-XXXX-4412", 185.00, "45 Colorado St, Austin, TX"),
-        (1003, 3, "Elena Rostova", "elena.r@cybersec-lab.io", "3782-XXXX-XXXX-8820", 399.00, "789 Michigan Ave, Chicago, IL")
-    ])
-
-    cursor.executemany("""
-    INSERT INTO financial_transactions (transaction_id, event_id, revenue, net_profit, bank_wire_routing)
-    VALUES (?, ?, ?, ?, ?)
-    """, [
-        (501, 1, 592000.00, 266400.00, "ROUTING-021000021-ACC-99281"),
-        (502, 2, 88200.00, 33516.00, "ROUTING-111000025-ACC-44192"),
-        (503, 3, 142000.00, 71000.00, "ROUTING-071000013-ACC-33104")
-    ])
-
-    cursor.executemany("""
-    INSERT INTO admin_credentials (user_id, username, password_hash, api_secret_key)
-    VALUES (?, ?, ?, ?)
-    """, [
-        (1, "root_admin", "sha256$8f4a2c9e...$SUPER_SECRET_SALT", "sk_live_enterprise_secret_89921"),
-        (2, "finance_director", "sha256$1b3d5f7a...$FINANCE_SALT", "sk_live_finance_secret_44120")
+        (1, 1, 1, "ticket_booking", "https://events.example.com/ai-summit-2026-bengaluru/tickets", "Book AI Summit (Bengaluru) Tickets"),
+        (2, 1, 1, "official_site", "https://events.example.com/ai-summit-2026-bengaluru", "Official AI Summit Bengaluru Portal"),
+        (3, 1, 1, "venue_map", "https://events.example.com/ai-summit-2026-bengaluru/seat-map", "Bengaluru Seat Map"),
+        (4, 1, 2, "ticket_booking", "https://events.example.com/ai-summit-2026-hyderabad/tickets", "Book AI Summit (Hyderabad) Tickets"),
+        (5, 1, 2, "official_site", "https://events.example.com/ai-summit-2026-hyderabad", "Official AI Summit Hyderabad Portal"),
+        (6, 1, 2, "venue_map", "https://events.example.com/ai-summit-2026-hyderabad/seat-map", "Hyderabad Seat Map"),
+        (7, 2, 3, "ticket_booking", "https://events.example.com/neon-nights-jazz-mumbai/tickets", "Book Neon Nights Jazz Festival Tickets"),
+        (8, 2, 3, "venue_map", "https://events.example.com/neon-nights-jazz-mumbai/seat-map", "View Jio World Garden Seat Map"),
+        (9, 3, 4, "ticket_booking", "https://events.example.com/cyber-defense-expo-delhi/register", "Register for Cybersecurity & Cloud Defense Expo"),
+        (10, 3, 4, "schedule_info", "https://events.example.com/cyber-defense-expo-delhi/agenda", "Cyber Defense Expo Full Agenda"),
+        (11, 3, 4, "venue_map", "https://events.example.com/cyber-defense-expo-delhi/seat-map", "Delhi Expo Seat Map"),
+        (12, 4, 5, "ticket_booking", "https://events.example.com/world-symphony-gala-chennai/seats", "Reserve World Symphony Gala Seats"),
+        (13, 4, 5, "official_site", "https://events.example.com/world-symphony-gala-chennai", "World Symphony Gala Program & Details"),
+        (14, 4, 5, "venue_map", "https://events.example.com/world-symphony-gala-chennai/seat-map", "Music Academy Seat Map"),
+        (15, 5, 6, "ticket_booking", "https://events.example.com/culinary-wine-expo-goa/tickets", "Book Culinary & Wine Expo Tickets"),
+        (16, 5, 6, "official_site", "https://events.example.com/culinary-wine-expo-goa", "Culinary Expo Goa Official Site"),
+        (17, 5, 6, "venue_map", "https://events.example.com/culinary-wine-expo-goa/seat-map", "Goa Pavilion Seat Map"),
     ])
 
     conn.commit()
+    cursor.execute("PRAGMA user_version = 2")
+    conn.commit()
     conn.close()
-    print(f"[SUCCESS] Demo database initialized successfully at: {DB_PATH}")
+    print(f"[SUCCESS] India demo database initialized at: {DB_PATH}")
+
+
+def ensure_india_demo_database() -> bool:
+    """Rebuild the demo DB when it is missing or does not match the current schema."""
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            rows = conn.execute("SELECT DISTINCT country FROM event_locations").fetchall()
+            countries = {str(r[0]).strip() for r in rows}
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'"
+                )
+            }
+            required_tables = {
+                "events", "event_locations", "event_schedules", "tickets",
+                "seats", "availability", "event_urls",
+            }
+            expected_columns = {
+                "events": {"event_id", "name", "category", "description", "organizer"},
+                "event_locations": {"location_id", "venue_name", "address", "city", "state", "country", "postal_code", "capacity"},
+                "event_schedules": {"schedule_id", "event_id", "location_id", "event_date", "start_time", "end_time", "doors_open", "status"},
+                "tickets": {"ticket_id", "schedule_id", "tier_name", "price", "currency", "perks"},
+                "seats": {"seat_id", "location_id", "schedule_id", "seat_code", "section", "row_num", "seat_number", "tier_name", "is_accessible"},
+                "availability": {"availability_id", "schedule_id", "ticket_id", "total_allocated", "tickets_sold", "tickets_available", "status", "last_updated"},
+                "event_urls": {"url_id", "event_id", "schedule_id", "url_type", "url", "label"},
+            }
+            schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+            has_current_columns = all(
+                {row[1] for row in conn.execute(f"PRAGMA table_info({table})")} == columns
+                for table, columns in expected_columns.items()
+            )
+            if schema_version == 2 and tables == required_tables and has_current_columns and countries == {"India"}:
+                return False
+        except sqlite3.Error:
+            pass
+        finally:
+            conn.close()
+    init_database()
+    return True
+
 
 if __name__ == "__main__":
     init_database()

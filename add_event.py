@@ -56,8 +56,8 @@ def add_new_event(
     try:
         # 1. Insert into events
         cursor.execute("""
-            INSERT INTO events (name, category, description, organizer, internal_production_cost, profit_margin_target, organizer_bank_account)
-            VALUES (?, ?, ?, ?, 50000.0, 0.35, 'ADMIN-AUTO-SEEDED')
+            INSERT INTO events (name, category, description, organizer)
+            VALUES (?, ?, ?, ?)
         """, (name, category, description, organizer))
         event_id = cursor.lastrowid
 
@@ -68,8 +68,8 @@ def add_new_event(
             location_id = loc_row[0]
         else:
             cursor.execute("""
-                INSERT INTO event_locations (venue_name, address, city, state, postal_code, capacity, venue_security_alarm_code, manager_private_phone)
-                VALUES (?, ?, ?, ?, '00000', ?, 'SEC-GEN-AUTO', '+1-800-555-0100')
+                INSERT INTO event_locations (venue_name, address, city, state, country, postal_code, capacity)
+                VALUES (?, ?, ?, ?, 'India', '000000', ?)
             """, (venue_name, address, city, state, capacity))
             location_id = cursor.lastrowid
 
@@ -102,8 +102,8 @@ def add_new_event(
             
             # 4. Insert into tickets
             cursor.execute("""
-                INSERT INTO tickets (schedule_id, tier_name, price, currency, perks, internal_markup_rate, merchant_fee_cut)
-                VALUES (?, ?, ?, 'USD', ?, 0.12, 0.03)
+                INSERT INTO tickets (schedule_id, tier_name, price, currency, perks)
+                VALUES (?, ?, ?, 'INR', ?)
             """, (schedule_id, tier_name, price, perks))
             ticket_id = cursor.lastrowid
 
@@ -112,8 +112,8 @@ def add_new_event(
             available = allocated - sold
             status = "AVAILABLE" if available > 10 else "LIMITED"
             cursor.execute("""
-                INSERT INTO availability (schedule_id, ticket_id, total_allocated, tickets_sold, tickets_available, status, last_updated, reserve_override_pin, broker_allocation_ratio)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'PIN-AUTO', 0.05)
+                INSERT INTO availability (schedule_id, ticket_id, total_allocated, tickets_sold, tickets_available, status, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (schedule_id, ticket_id, allocated, sold, available, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
             # 6. Generate Seats for this tier (generate sample 10 seats per tier for demonstration)
@@ -150,7 +150,7 @@ def add_new_event(
             "event_id": event_id,
             "name": name,
             "category": category,
-            "venue": f"{venue_name}, {city}, {state}",
+            "venue": f"{venue_name}, {city}, {state}, India",
             "date": event_date,
             "schedule_id": schedule_id,
             "ticket_tiers_count": total_tickets_added,

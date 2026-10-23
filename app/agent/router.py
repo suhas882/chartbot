@@ -27,7 +27,7 @@ class AgentRouter:
     def __init__(self, vector_store: HybridVectorStore, llm_client: LocalLLMClient):
         self.vector_store = vector_store
         self.llm = llm_client
-        self.event_db = EventDatabaseEngine()
+        self.event_db = EventDatabaseEngine(llm_client=llm_client)
 
     def classify_intent(self, query: str) -> str:
         q_lower = query.strip().lower()
@@ -63,10 +63,11 @@ class AgentRouter:
             "sold out", "accessible", "wheelchair", "row", "section",
             "organizer", "who is organizing", "who organizes", "capacity", "attend",
             "different locations", "two locations", "multiple locations", "two cities",
-            # Cities & Venues
-            "chicago", "san francisco", "sf", "new york", "nyc", "manhattan", "austin", "boston",
-            "moscone", "javits", "moody", "waterloo", "mccormick", "symphony hall",
-            "november", "december",
+            # Indian cities & venues
+            "bengaluru", "bangalore", "hyderabad", "mumbai", "delhi", "chennai", "goa",
+            "noida", "panaji", "madras", "bombay",
+            "biec", "hitex", "jio world", "music academy", "kala academy",
+            "november", "december", "india",
             # Security access test triggers
             "credit card", "profit margin", "production cost", "customer", "admin password",
             "cvv", "card number", "secret key"
@@ -88,7 +89,7 @@ class AgentRouter:
             "• **Strict Backend Access Control**: Zero-trust table and column whitelisting enforced at the backend engine to prevent unauthorized access to sensitive financials or customer PII.\n"
             "• **Document RAG (ChromaDB + BM25)**: Query internal policies, security frameworks, or uploaded enterprise files.\n"
             "• **100% Local Inference**: Zero cloud telemetry or data leakage.\n\n"
-            f"Currently, there are **5 live events** indexed in the relational database, and **{doc_count} document(s)** in the local vector store. "
+            f"Currently, live events in **India** are indexed in the relational database, and **{doc_count} document(s)** are in the local vector store. "
             "How can I assist you today?"
         )
         return {

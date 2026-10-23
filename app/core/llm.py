@@ -1,13 +1,8 @@
-import os
-os.environ["USE_TF"] = "0"
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 import re
 import json
 import urllib.request
 import urllib.error
 from typing import List, Dict, Any, Generator, Optional
-import torch
 from app.config import OLLAMA_HOST, DEFAULT_LLM_MODEL
 
 # Singleton cached Hugging Face model and tokenizer
@@ -29,62 +24,59 @@ def _get_hf_pipeline():
 
 class LocalLLMClient:
     """
-    Local reasoning engine interfacing with local Ollama daemon or
-    in-process open-source Hugging Face transformer model (Qwen2.5-0.5B-Instruct).
-    Guarantees 100% offline, zero-cloud execution with genuine LLM comprehension.
+    Local reasoning engine using the configured Ollama model only.
+    No alternate model or remote provider is selected when Ollama is unavailable.
     """
     def __init__(self, host: str = OLLAMA_HOST, model: str = DEFAULT_LLM_MODEL):
         self.host = host
         self.model = model
 
     def check_ollama_status(self) -> Dict[str, Any]:
-        """Checks if local Ollama daemon is reachable; otherwise reports local Hugging Face engine."""
+        """Checks whether Ollama is reachable and has the configured model installed."""
         url = f"{self.host}/api/tags"
         try:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=1.0) as resp:
                 data = json.loads(resp.read().decode())
                 models = [m.get("name") for m in data.get("models", [])]
-                active = self.model if self.model in models or f"{self.model}:latest" in models else (models[0] if models else self.model)
+                active = next((m for m in models if m in {self.model, f"{self.model}:latest"}), None)
                 return {
-                    "available": True,
+                    "available": active is not None,
                     "engine": "Ollama Daemon",
                     "host": self.host,
-                    "active_model": active,
+                    "active_model": active or self.model,
                     "installed_models": models
                 }
         except Exception:
             return {
                 "available": False,
-                "engine": "Local Hugging Face (PyTorch)",
+                "engine": "Ollama unavailable",
                 "host": self.host,
-                "active_model": f"{LOCAL_HF_MODEL_NAME} (Local)",
-                "installed_models": [LOCAL_HF_MODEL_NAME]
+                "active_model": self.model,
+                "installed_models": []
             }
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Non-streaming generation from local Ollama or in-process Hugging Face LLM."""
+        """Generate from the configured local Ollama model only."""
         status = self.check_ollama_status()
-        if status["available"]:
-            url = f"{self.host}/api/generate"
-            payload = {
-                "model": status["active_model"],
-                "prompt": prompt,
-                "system": system_prompt or "",
-                "stream": False,
-                "options": {"temperature": 0.1}
-            }
-            try:
-                data_bytes = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(url, data=data_bytes, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=45) as resp:
-                    res_json = json.loads(resp.read().decode())
-                    return res_json.get("response", "").strip()
-            except Exception:
-                pass  # Fall through to local Hugging Face model
-
-        # Local Hugging Face Model Generation
-        return self._generate_with_hf(prompt, system_prompt)
+        if not status["available"]:
+            return ""
+        url = f"{self.host}/api/generate"
+        payload = {
+            "model": status["active_model"],
+            "prompt": prompt,
+            "system": system_prompt or "",
+            "stream": False,
+            "options": {"temperature": 0.1}
+        }
+        try:
+            data_bytes = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data_bytes, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                res_json = json.loads(resp.read().decode())
+                return res_json.get("response", "").strip()
+        except Exception:
+            return ""
 
     def _generate_with_hf(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Runs inference locally on CPU via Hugging Face transformer model."""

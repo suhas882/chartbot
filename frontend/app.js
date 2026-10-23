@@ -1,594 +1,67 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // Elements
-  const statusDot = document.getElementById("statusDot");
-  const statusTitle = document.getElementById("statusTitle");
-  const activeModel = document.getElementById("activeModel");
-  const totalChunksCount = document.getElementById("totalChunksCount");
-  const docCountBadge = document.getElementById("docCountBadge");
-  const docList = document.getElementById("docList");
-  const refreshDocsBtn = document.getElementById("refreshDocsBtn");
-  const reportList = document.getElementById("reportList");
-  const reportCountBadge = document.getElementById("reportCountBadge");
+  const $ = (id) => document.getElementById(id);
+  const form = $("chatForm"), input = $("userInput"), send = $("sendBtn");
+  const messages = $("messagesList"), welcome = $("welcomeHero"), eventList = $("eventList");
+  const sidebar = $("sidebar"), statusTitle = $("statusTitle"), modelLabel = $("activeModel");
+  const demoSeatRoutes = {"ai-summit-2026-bengaluru":[1,1],"ai-summit-2026-hyderabad":[1,2],"neon-nights-jazz-mumbai":[2,3],"cyber-defense-expo-delhi":[3,4],"world-symphony-gala-chennai":[4,5],"culinary-wine-expo-goa":[5,6]};
+  const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-  // Relational Database Elements
-  const dbStatus = document.getElementById("dbStatus");
-  const accessControlStatus = document.getElementById("accessControlStatus");
-  const eventList = document.getElementById("eventList");
-  const eventCountBadge = document.getElementById("eventCountBadge");
-
-  const dropZone = document.getElementById("dropZone");
-  const fileInput = document.getElementById("fileInput");
-  const uploadProgressCard = document.getElementById("uploadProgressCard");
-  const uploadProgressText = document.getElementById("uploadProgressText");
-
-  const welcomeHero = document.getElementById("welcomeHero");
-  const messagesList = document.getElementById("messagesList");
-  const chatForm = document.getElementById("chatForm");
-  const userInput = document.getElementById("userInput");
-  const sendBtn = document.getElementById("sendBtn");
-  const clearChatBtn = document.getElementById("clearChatBtn");
-  const chipButtons = document.querySelectorAll(".chip-btn");
-
-  // Evidence Modal
-  const evidenceModal = document.getElementById("evidenceModal");
-  const closeEvidenceModalBtn = document.getElementById("closeEvidenceModalBtn");
-  const modalChunkId = document.getElementById("modalChunkId");
-  const modalDocSource = document.getElementById("modalDocSource");
-  const modalEvidenceText = document.getElementById("modalEvidenceText");
-
-  // Permission Modal
-  const permissionModal = document.getElementById("permissionModal");
-  const closePermissionModalBtn = document.getElementById("closePermissionModalBtn");
-  const ticketRiskBadge = document.getElementById("ticketRiskBadge");
-  const ticketDesc = document.getElementById("ticketDesc");
-  const ticketToolName = document.getElementById("ticketToolName");
-  const ticketId = document.getElementById("ticketId");
-  const ticketArgs = document.getElementById("ticketArgs");
-  const approveTicketBtn = document.getElementById("approveTicketBtn");
-  const denyTicketBtn = document.getElementById("denyTicketBtn");
-
-  let activeTicketId = null;
-
-  // Auto-resize textarea
-  userInput.addEventListener("input", () => {
-    userInput.style.height = "auto";
-    userInput.style.height = Math.min(userInput.scrollHeight, 120) + "px";
-  });
-
-  userInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      chatForm.dispatchEvent(new Event("submit"));
-    }
-  });
-
-  // Prompt chips
-  chipButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const q = btn.getAttribute("data-query");
-      userInput.value = q;
-      chatForm.dispatchEvent(new Event("submit"));
+  function renderAnswer(text) {
+    // Route demo-only ticket URLs into this prototype’s local seat view.
+    text = String(text ?? "").replace(/https?:\/\/events\.example\.com\/([^/\s)]+)\/(?:tickets|seats|register|seat-map)/gi, (url, slug) => {
+      const target = demoSeatRoutes[slug.toLowerCase()];
+      return target ? `/seats?event_id=${target[0]}&schedule_id=${target[1]}` : url;
     });
-  });
-
-  const refreshEventsBtn = document.getElementById("refreshEventsBtn");
-  if (refreshEventsBtn) {
-    refreshEventsBtn.addEventListener("click", () => {
-      fetchEvents();
-      fetchHealth();
-    });
+    let safe = escapeHTML(text);
+    safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/seats\?[^\s)]+)\)/g, '<a class="chat-event-link" href="$2" target="_self" rel="noopener noreferrer">$1 ↗</a>');
+    safe = safe.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g, '$1<a class="chat-event-link" href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+    safe = safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g,"<code>$1</code>");
+    return safe.split(/\n{2,}/).map(block => {
+      const lines = block.split("\n");
+      if (lines.every(line => /^\s*[-•*]\s+/.test(line))) return "<ul>" + lines.map(line => `<li>${line.replace(/^\s*[-•*]\s+/,"")}</li>`).join("") + "</ul>";
+      return `<p>${lines.join("<br>")}</p>`;
+    }).join("");
   }
-
-  function hookUpEventClicks() {
-    document.querySelectorAll(".event-quick-item").forEach((item) => {
-      item.onclick = () => {
-        const evName = item.getAttribute("data-event") || item.querySelector(".doc-item-title")?.textContent.replace(/^[^\w]+/, "").trim();
-        if (evName) {
-          userInput.value = `Are tickets available for ${evName}?`;
-          chatForm.dispatchEvent(new Event("submit"));
-        }
-      };
-    });
+  function addMessage(role, text, loading = false) {
+    const row = document.createElement("article"); row.className = `message ${role}-msg`;
+    const avatar = role === "user" ? "Y" : "✳";
+    row.innerHTML = `<div class="message-avatar">${avatar}</div><div class="message-main"><div class="message-label">${role === "user" ? "You" : "Chartbot"}</div><div class="message-body">${loading ? '<span class="typing"><i></i><i></i><i></i></span>' : role === "user" ? escapeHTML(text).replace(/\n/g,"<br>") : renderAnswer(text)}</div></div>`;
+    messages.appendChild(row); row.scrollIntoView({behavior:"smooth",block:"nearest"}); return row;
   }
-
-  // Hook up pre-rendered event clicks immediately
-  hookUpEventClicks();
-
-  // Load Initial State
-  fetchHealth();
-  fetchEvents();
-  fetchDocuments();
-  fetchReports();
-
-  // Periodic polling for health and pending tickets
-  setInterval(fetchHealth, 10000);
-
-  async function fetchHealth() {
+  function newChat() { messages.replaceChildren(); welcome.classList.remove("hidden"); input.value=""; input.style.height="auto"; input.focus(); }
+  $("clearChatBtn").addEventListener("click", newChat); $("clearTopBtn").addEventListener("click", newChat);
+  document.querySelectorAll("[data-query]").forEach(button => button.addEventListener("click", () => { input.value=button.dataset.query; form.requestSubmit(); sidebar.classList.remove("open"); }));
+  input.addEventListener("input", () => { input.style.height="auto"; input.style.height=Math.min(input.scrollHeight,140)+"px"; });
+  input.addEventListener("keydown", event => { if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();form.requestSubmit();} });
+  form.addEventListener("submit", async event => {
+    event.preventDefault(); const question=input.value.trim(); if(!question||send.disabled)return;
+    welcome.classList.add("hidden"); addMessage("user",question); input.value="";input.style.height="auto";send.disabled=true;
+    const pending=addMessage("bot","",true);
     try {
-      const res = await fetch("/api/health");
-      if (!res.ok) return;
-      const data = await res.json();
-
-      if (data.llm_engine && data.llm_engine.ollama_available) {
-        statusDot.className = "status-indicator-dot online";
-        statusTitle.textContent = "Ollama Daemon Online";
-        activeModel.textContent = data.llm_engine.active_model || "llama3.2:3b";
-      } else {
-        statusDot.className = "status-indicator-dot online";
-        statusTitle.textContent = "Local Grounded Engine";
-        activeModel.textContent = data.llm_engine ? data.llm_engine.target_model : "llama3.2:3b";
-      }
-
-      if (data.relational_db) {
-        if (dbStatus) dbStatus.textContent = `${data.relational_db.events_count || 5} Events (SQLite)`;
-        if (accessControlStatus) accessControlStatus.textContent = "Backend Whitelisted";
-      }
-
-      totalChunksCount.textContent = data.embeddings ? data.embeddings.total_chunks_indexed : 0;
-      docCountBadge.textContent = `${data.indexed_documents_count || 0} docs`;
-    } catch (e) {
-      statusDot.className = "status-indicator-dot offline";
-      statusTitle.textContent = "Engine Offline";
-    }
-  }
-
-  async function fetchEvents() {
-    if (!eventList) return;
+      const response=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:question})});
+      const data=await response.json(); if(!response.ok)throw new Error(data.detail||"The chat service could not answer right now.");
+      pending.remove();addMessage("bot",data.response||"I couldn’t find an answer in the event data.");
+    } catch(error) { pending.remove();addMessage("bot",`I couldn’t reach the event assistant. ${error.message||"Please try again."}`); }
+    finally { send.disabled=false;input.focus(); }
+  });
+  async function fetchHealth(){try{const res=await fetch("/api/health");if(!res.ok)throw 0;const data=await res.json();statusTitle.textContent=data.llm_engine?.ollama_available?"Ollama connected":"Ollama offline · event data ready";modelLabel.textContent=data.llm_engine?.active_model||data.llm_engine?.target_model||"Ollama · Llama";}catch{statusTitle.textContent="Waiting for local service";}}
+  async function fetchEvents(){eventList.innerHTML='<div class="side-loading">Loading events…</div>';try{const res=await fetch("/api/events");if(!res.ok)throw 0;const rows=await res.json();const grouped=new Map();for(const event of rows){const key=event.name||event.event_name;if(!key)continue;if(!grouped.has(key))grouped.set(key,{name:key,category:event.category||"Live event",cities:[]});const item=grouped.get(key);if(event.city&&!item.cities.includes(event.city))item.cities.push(event.city);}eventList.replaceChildren();[...grouped.values()].slice(0,8).forEach(event=>{const button=document.createElement("button");button.className="event-link";button.type="button";const title=document.createElement("span");title.className="event-name";title.textContent=event.name;const meta=document.createElement("span");meta.className="event-meta";meta.textContent=[event.category,event.cities.join(" · ")||"India"].join(" · ");button.append(title,meta);button.addEventListener("click",()=>{input.value=`Tell me about ${event.name}: dates, venue, tickets, and booking link`;form.requestSubmit();});eventList.append(button);});if(!eventList.childElementCount)eventList.innerHTML='<div class="side-loading">No events to show yet</div>';}catch{eventList.innerHTML='<div class="side-loading">Events will appear when the service is ready</div>';}}
+  $("refreshEventsBtn").addEventListener("click",fetchEvents);$("menuBtn").addEventListener("click",()=>sidebar.classList.toggle("open"));
+  async function loadSeatPage() {
+    const params = new URLSearchParams(location.search);
+    const eventId = Number(params.get("event_id")), scheduleId = Number(params.get("schedule_id"));
+    if (!eventId || !scheduleId) return;
+    $("welcomeHero").classList.add("hidden"); $("messagesList").classList.add("hidden"); $("conversation").classList.add("hidden"); $("seatPage").classList.remove("hidden"); $("composer-area")?.classList.add("hidden"); document.querySelector(".composer-area").classList.add("hidden");
     try {
-      const res = await fetch("/api/events");
-      if (!res.ok) return;
-      const events = await res.json();
-      if (eventCountBadge) eventCountBadge.textContent = `${events.length} events`;
-
-      if (events && events.length > 0) {
-        eventList.innerHTML = "";
-        events.forEach((ev) => {
-          const li = document.createElement("li");
-          li.className = "doc-item event-quick-item";
-          li.style.cursor = "pointer";
-          li.setAttribute("data-event", ev.name);
-          li.innerHTML = `
-            <div class="doc-item-info">
-              <span class="doc-item-title" title="${ev.name}">🎟️ ${ev.name}</span>
-              <span class="doc-item-meta">${ev.category} • ${ev.organizer}</span>
-            </div>
-          `;
-          eventList.appendChild(li);
-        });
-        hookUpEventClicks();
-      }
-    } catch (e) {
-      console.error("Failed to load events", e);
-    }
+      const response = await fetch(`/api/seats-page?event_id=${eventId}&schedule_id=${scheduleId}`);
+      const data = await response.json(); if (!response.ok) throw new Error(data.detail || "Could not load this event.");
+      const e = data.event; $("seatEventName").textContent = e.name; $("seatEventMeta").textContent = `${e.venue_name} · ${e.city}, ${e.state} · ${e.event_date} · ${e.start_time}–${e.end_time}`;
+      const ticketOptions = $("ticketOptions"); ticketOptions.replaceChildren();
+      for (const ticket of data.tickets) { const card = document.createElement("article"); card.className = "ticket-option"; const name=document.createElement("strong");name.textContent=ticket.tier_name;const price=document.createElement("b");price.textContent=new Intl.NumberFormat("en-IN",{style:"currency",currency:ticket.currency||"INR",maximumFractionDigits:0}).format(ticket.price);const avail=document.createElement("span");avail.className="availability-tag";avail.textContent=ticket.tickets_available>0?`${ticket.tickets_available} available`:"Sold out";const perks=document.createElement("p");perks.textContent=ticket.perks||"Event admission";card.append(name,price,avail,perks);ticketOptions.append(card); }
+      const sections = new Map(); for(const seat of data.seats){ if(!sections.has(seat.section))sections.set(seat.section,[]);sections.get(seat.section).push(seat); }
+      const sectionRoot=$("seatSections");sectionRoot.replaceChildren();for(const [section,seats] of sections){const group=document.createElement("div");group.className="seat-section";const heading=document.createElement("div");heading.className="seat-section-heading";const title=document.createElement("strong");title.textContent=section;const count=document.createElement("span");count.textContent=`${seats.length} seats`;heading.append(title,count);const list=document.createElement("div");list.className="seat-code-list";for(const seat of seats){const chip=document.createElement("span");chip.className="seat-code"+(seat.is_accessible?" accessible":"");chip.textContent=seat.seat_code;chip.title=`${seat.row_num}, seat ${seat.seat_number}${seat.is_accessible?" · Accessible":""}`;list.append(chip);}group.append(heading,list);sectionRoot.append(group);}
+      if(!data.tickets.length)ticketOptions.innerHTML="<p>No ticket tiers are listed for this session.</p>";if(!data.seats.length)sectionRoot.innerHTML="<p>Seat details are not available for this session.</p>";
+    } catch(error) { $("seatEventName").textContent="Seats couldn’t be loaded";$("seatEventMeta").textContent=error.message||"Try again from the event chat."; }
   }
-
-  async function fetchDocuments() {
-    try {
-      const res = await fetch("/api/documents");
-      if (!res.ok) return;
-      const docs = await res.json();
-      renderDocumentList(docs);
-    } catch (e) {
-      console.error("Failed to load documents", e);
-    }
-  }
-
-  function renderDocumentList(docs) {
-    docList.innerHTML = "";
-    if (!docs || docs.length === 0) {
-      docList.innerHTML = '<li class="doc-item-empty">No documents indexed. Upload above to begin.</li>';
-      return;
-    }
-
-    docs.forEach((doc) => {
-      const li = document.createElement("li");
-      li.className = "doc-item";
-      li.innerHTML = `
-        <div class="doc-item-info">
-          <span class="doc-item-title" title="${doc.filename}">${doc.filename}</span>
-          <span class="doc-item-meta">${doc.indexed_chunks || 1} indexed chunk(s)</span>
-        </div>
-        <button class="doc-delete-btn" data-filename="${doc.filename}" title="Purge document vectors">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-        </button>
-      `;
-
-      li.querySelector(".doc-delete-btn").addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const fn = e.currentTarget.getAttribute("data-filename");
-        if (confirm(`Permanently purge '${fn}' and delete all its vector embeddings from ChromaDB?`)) {
-          await deleteDocument(fn);
-        }
-      });
-
-      docList.appendChild(li);
-    });
-  }
-
-  async function deleteDocument(filename) {
-    try {
-      const res = await fetch(`/api/documents/${encodeURIComponent(filename)}`, { method: "DELETE" });
-      if (res.ok) {
-        fetchDocuments();
-        fetchHealth();
-      }
-    } catch (e) {
-      alert("Failed to delete document: " + e);
-    }
-  }
-
-  async function fetchReports() {
-    try {
-      const res = await fetch("/api/reports");
-      if (!res.ok) return;
-      const reports = await res.json();
-      reportList.innerHTML = "";
-      reportCountBadge.textContent = reports.length;
-      if (reports.length === 0) {
-        reportList.innerHTML = '<li class="doc-item-empty">No reports generated yet</li>';
-        return;
-      }
-      reports.forEach((r) => {
-        const li = document.createElement("li");
-        li.className = "doc-item";
-        li.innerHTML = `
-          <div class="doc-item-info">
-            <span class="doc-item-title" title="${r.filename}">📄 ${r.filename}</span>
-            <span class="doc-item-meta">${(r.size_bytes / 1024).toFixed(1)} KB</span>
-          </div>
-        `;
-        reportList.appendChild(li);
-      });
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  refreshDocsBtn.addEventListener("click", () => {
-    fetchDocuments();
-    fetchReports();
-    fetchHealth();
-  });
-
-  // File Upload Handlers
-  dropZone.addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", (e) => handleFiles(e.target.files));
-
-  dropZone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dropZone.classList.add("dragover");
-  });
-  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
-  dropZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropZone.classList.remove("dragover");
-    if (e.dataTransfer.files) handleFiles(e.dataTransfer.files);
-  });
-
-  async function handleFiles(files) {
-    if (!files || files.length === 0) return;
-    uploadProgressCard.classList.remove("hidden");
-
-    for (let file of files) {
-      uploadProgressText.textContent = `Scrubbing PII & Indexing: ${file.name}...`;
-      const formData = new FormData();
-      formData.append("file", file);
-
-      try {
-        const res = await fetch("/api/documents/upload", {
-          method: "POST",
-          body: formData,
-        });
-        const contentType = res.headers.get("content-type") || "";
-        let result;
-        if (contentType.includes("application/json")) {
-          result = await res.json();
-        } else {
-          const rawText = await res.text();
-          throw new Error(`Server returned HTTP ${res.status}: ${rawText.slice(0, 120)}`);
-        }
-        if (!res.ok) {
-          alert(`Error uploading ${file.name}: ${result.detail || "Upload failed"}`);
-        }
-      } catch (err) {
-        alert(`Failed to upload ${file.name}: ${err.message || err}`);
-      }
-    }
-
-    uploadProgressCard.classList.add("hidden");
-    fileInput.value = "";
-    fetchDocuments();
-    fetchHealth();
-  }
-
-  // Clear Chat
-  clearChatBtn.addEventListener("click", () => {
-    messagesList.innerHTML = "";
-    welcomeHero.classList.remove("hidden");
-  });
-
-  // Chat Form Submission
-  chatForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const query = userInput.value.trim();
-    if (!query) return;
-
-    welcomeHero.classList.add("hidden");
-    appendUserMessage(query);
-    userInput.value = "";
-    userInput.style.height = "auto";
-    sendBtn.disabled = true;
-
-    // Loading bubble
-    const loadingBubble = appendLoadingBubble();
-
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: query }),
-      });
-      const data = await res.json();
-      loadingBubble.remove();
-      appendAssistantMessage(data);
-    } catch (err) {
-      loadingBubble.remove();
-      appendErrorMessage("Failed to connect to local RAG engine: " + err);
-    } finally {
-      sendBtn.disabled = false;
-    }
-  });
-
-  function appendUserMessage(text) {
-    const div = document.createElement("div");
-    div.className = "message-bubble user-msg";
-    div.innerHTML = `
-      <div class="avatar">You</div>
-      <div class="message-content-wrap">
-        <div class="message-sender">User</div>
-        <div class="message-body">${escapeHtml(text)}</div>
-      </div>
-    `;
-    messagesList.appendChild(div);
-    div.scrollIntoView({ behavior: "smooth" });
-  }
-
-  function appendLoadingBubble() {
-    const div = document.createElement("div");
-    div.className = "message-bubble bot-msg";
-    div.innerHTML = `
-      <div class="avatar">AI</div>
-      <div class="message-content-wrap">
-        <div class="message-sender">Local Agent (llama3.2:3b)</div>
-        <div class="message-body">
-          <div class="rag-mode-pill" style="display:inline-flex;">
-            <span class="dot-pulse"></span>
-            <span>Retrieving & Grounding Evidence...</span>
-          </div>
-        </div>
-      </div>
-    `;
-    messagesList.appendChild(div);
-    div.scrollIntoView({ behavior: "smooth" });
-    return div;
-  }
-
-  function appendErrorMessage(errorText) {
-    const div = document.createElement("div");
-    div.className = "message-bubble bot-msg";
-    div.innerHTML = `
-      <div class="avatar">AI</div>
-      <div class="message-content-wrap">
-        <div class="message-sender">System</div>
-        <div class="message-body" style="color: var(--accent-red);">${escapeHtml(errorText)}</div>
-      </div>
-    `;
-    messagesList.appendChild(div);
-  }
-
-  function appendAssistantMessage(data) {
-    const div = document.createElement("div");
-    div.className = "message-bubble bot-msg";
-
-    // Format markdown text with citation pills
-    let formattedText = formatMarkdown(data.response || "");
-
-    // Build reasoning steps accordion
-    let stepsHtml = "";
-    if (data.steps && data.steps.length > 0) {
-      stepsHtml = `
-        <div class="pipeline-steps-card">
-          <div class="pipeline-steps-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
-            <span>Reasoning Pipeline (${data.steps.length} stages)</span>
-          </div>
-          ${data.steps
-            .map(
-              (s) => `
-            <div class="pipeline-step-item">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              <span>${escapeHtml(s)}</span>
-            </div>`
-            )
-            .join("")}
-        </div>
-      `;
-    }
-
-    // Build proposed action ticket card if mutating tool was requested
-    let actionTicketHtml = "";
-    if (data.action_proposed) {
-      const ticket = data.action_proposed;
-      const isHighRisk = ticket.risk_level === "HIGH";
-      actionTicketHtml = `
-        <div class="ticket-prompt-card ${isHighRisk ? "risk-high" : ""}" id="ticketCard_${ticket.ticket_id}">
-          <div class="ticket-prompt-header">
-            <div class="ticket-prompt-title">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-              <span>HITL Authorization Required: <code>${ticket.tool_name}</code></span>
-            </div>
-            <span class="risk-badge ${isHighRisk ? "risk-high" : "risk-medium"}">${ticket.risk_level}</span>
-          </div>
-          <p style="font-size: 0.85rem; color: #cbd5e1;">${escapeHtml(ticket.description)}</p>
-          <div class="ticket-prompt-actions">
-            <button class="btn-deny-sm" data-ticket="${ticket.ticket_id}">Reject</button>
-            <button class="btn-approve-sm" data-ticket="${ticket.ticket_id}">Approve & Execute</button>
-          </div>
-        </div>
-      `;
-    }
-
-    // Build Database Query & Access Control Inspection Card
-    let dbQueryHtml = "";
-    if (data.sql_query || data.access_control) {
-      const isBlocked = data.status === "SECURITY_BLOCKED" || (data.access_control && data.access_control.includes("DENIED"));
-      const tablesList = (data.tables_accessed || []).join(", ") || "Whitelisted Schema";
-      const colsList = (data.columns_accessed || []).slice(0, 8).join(", ") + ((data.columns_accessed && data.columns_accessed.length > 8) ? "..." : "");
-
-      dbQueryHtml = `
-        <div class="db-query-card ${isBlocked ? 'db-blocked' : 'db-approved'}">
-          <div class="db-query-header">
-            <div class="db-badge ${isBlocked ? 'badge-denied' : 'badge-passed'}">
-              ${isBlocked ? '🛡️ Backend Access Denied (Restricted Data)' : '🔒 Backend Whitelist Enforced'}
-            </div>
-            <span class="db-tables-pill">${escapeHtml(tablesList)}</span>
-          </div>
-          ${colsList ? `
-            <div class="db-meta-row">
-              <span class="db-meta-lbl">Columns Retrieved:</span>
-              <code class="db-meta-code">${escapeHtml(colsList)}</code>
-            </div>
-          ` : ''}
-          ${data.sql_query ? `
-            <details class="db-sql-toggle">
-              <summary>Inspect Scoped SQL (${data.row_count !== undefined ? data.row_count + ' records' : 'AST Validated'})</summary>
-              <pre class="db-sql-code">${escapeHtml(data.sql_query)}</pre>
-            </details>
-          ` : ''}
-        </div>
-      `;
-    }
-
-    div.innerHTML = `
-      <div class="avatar">AI</div>
-      <div class="message-content-wrap">
-        <div class="message-sender">Local Agent (llama3.2:3b)</div>
-        <div class="message-body">${formattedText}</div>
-        ${dbQueryHtml}
-        ${actionTicketHtml}
-        ${stepsHtml}
-      </div>
-    `;
-
-    // Hook up citation clicks
-    div.querySelectorAll(".citation-tag").forEach((tag) => {
-      tag.addEventListener("click", () => {
-        const cid = tag.getAttribute("data-cid");
-        openEvidenceModal(cid);
-      });
-    });
-
-    // Hook up ticket approval buttons
-    div.querySelectorAll(".btn-approve-sm").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const tid = btn.getAttribute("data-ticket");
-        submitTicketDecision(tid, "approve");
-      });
-    });
-    div.querySelectorAll(".btn-deny-sm").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const tid = btn.getAttribute("data-ticket");
-        submitTicketDecision(tid, "reject");
-      });
-    });
-
-    messagesList.appendChild(div);
-    div.scrollIntoView({ behavior: "smooth" });
-  }
-
-  function formatMarkdown(text) {
-    let html = escapeHtml(text);
-
-    // Markdown Links: [Label](https://...) -> <a href="..." target="_blank" class="chat-event-link">Label ↗</a>
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="chat-event-link">$1 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px;display:inline;vertical-align:middle;"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg></a>');
-
-    // Standalone URLs not already in an href
-    html = html.replace(/(^|[^"'>])(https?:\/\/[^\s\)<]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="chat-event-link">$2</a>');
-
-    // Convert [chunk_id] into interactive clickable citation tag
-    html = html.replace(/\[([a-zA-Z0-9_\-\.#]+)\]/g, (match, cid) => {
-      if (cid.includes("_c") || cid.includes("Policy") || cid.includes("Governance") || cid.includes("Security")) {
-        return `<span class="citation-tag" data-cid="${cid}">📄 ${cid}</span>`;
-      }
-      return match;
-    });
-
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3 style="font-size:1.05rem; margin:10px 0 6px; color:#f8fafc;">$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2 style="font-size:1.15rem; margin:12px 0 8px; color:#f8fafc;">$1</h2>');
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code class="chat-inline-code">$1</code>');
-
-    // Bold
-    html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-
-    // Italics
-    html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
-
-    // Bullet points
-    html = html.replace(/^• (.*$)/gim, '<div style="margin-left: 8px; margin-bottom: 6px;">• $1</div>');
-    html = html.replace(/\n\n/g, "<br><br>");
-    return html;
-  }
-
-  function escapeHtml(string) {
-    return String(string)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  // Evidence Modal Handler
-  function openEvidenceModal(chunkId) {
-    modalChunkId.textContent = chunkId;
-    modalDocSource.textContent = chunkId.split("_c")[0] || "Local Document";
-    modalEvidenceText.textContent = `Evidence verified from local persistent ChromaDB collection.\nChunk ID: ${chunkId}\n\nStrict ground-truth extraction enforced. No external cloud endpoints were queried.`;
-    evidenceModal.classList.remove("hidden");
-  }
-
-  closeEvidenceModalBtn.addEventListener("click", () => {
-    evidenceModal.classList.add("hidden");
-  });
-  evidenceModal.addEventListener("click", (e) => {
-    if (e.target === evidenceModal) evidenceModal.classList.add("hidden");
-  });
-
-  // Ticket Decision Submission
-  async function submitTicketDecision(tid, action) {
-    try {
-      const res = await fetch("/api/agent/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticket_id: tid, action: action }),
-      });
-      const data = await res.json();
-      const card = document.getElementById(`ticketCard_${tid}`);
-      if (card) {
-        if (action === "approve") {
-          card.style.borderColor = "var(--accent-green)";
-          card.innerHTML = `<span style="color: var(--accent-green); font-weight: 600;">✓ Action Approved & Executed Successfully!</span>`;
-        } else {
-          card.style.borderColor = "var(--accent-red)";
-          card.innerHTML = `<span style="color: var(--accent-red); font-weight: 600;">✕ Action Rejected by User.</span>`;
-        }
-      }
-      fetchReports();
-      fetchDocuments();
-    } catch (e) {
-      alert("Failed to submit decision: " + e);
-    }
-  }
+  fetchHealth();fetchEvents();loadSeatPage();setInterval(fetchHealth,30000);
 });

@@ -29,7 +29,7 @@ class DatabaseSecurityEngine:
             "event_id", "name", "category", "description", "organizer"
         },
         "event_locations": {
-            "location_id", "venue_name", "address", "city", "state", "postal_code", "capacity"
+            "location_id", "venue_name", "address", "city", "state", "country", "postal_code", "capacity"
         },
         "event_schedules": {
             "schedule_id", "event_id", "location_id", "event_date", "start_time", "end_time", "doors_open", "status"
@@ -192,8 +192,38 @@ class DatabaseSecurityEngine:
         conn = sqlite3.connect(uri, uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
 
+        denied_reads: List[str] = []
+
+        def authorize(action: int, arg1: Optional[str], arg2: Optional[str], _database: Optional[str], _source: Optional[str]) -> int:
+            if action == sqlite3.SQLITE_SELECT or action == getattr(sqlite3, "SQLITE_RECURSIVE", -1):
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_READ:
+                table = (arg1 or "").lower()
+                column = (arg2 or "").lower()
+                allowed_columns = cls.ALLOWED_TABLES.get(table)
+                if allowed_columns is None:
+                    denied_reads.append(f"Table '{table}' is not in the authorized query whitelist.")
+                    return sqlite3.SQLITE_DENY
+                if column and column not in allowed_columns:
+                    denied_reads.append(f"Column '{table}.{column}' is not in the authorized query whitelist.")
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_FUNCTION:
+                function_name = (arg2 or arg1 or "").lower()
+                safe_functions = {
+                    "count", "min", "max", "sum", "avg", "lower", "upper", "coalesce",
+                    "ifnull", "nullif", "length", "date", "time", "datetime", "strftime",
+                    "substr", "trim", "ltrim", "rtrim", "replace", "abs", "round", "like",
+                }
+                if function_name in safe_functions:
+                    return sqlite3.SQLITE_OK
+                denied_reads.append(f"Function '{function_name}' is not permitted.")
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_DENY
+
         try:
             cursor = conn.cursor()
+            conn.set_authorizer(authorize)
             cursor.execute(sanitized_sql)
             rows = cursor.fetchall()
             
@@ -214,5 +244,12 @@ class DatabaseSecurityEngine:
                 "data": results,
                 "policy_enforcement": "PASSED (Backend Whitelist Enforced)"
             }
+        except sqlite3.DatabaseError as exc:
+            if denied_reads:
+                raise SecurityAccessDeniedError(
+                    reason="Backend Database Security Policy Violation",
+                    violations=denied_reads,
+                ) from exc
+            raise
         finally:
             conn.close()
