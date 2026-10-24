@@ -1,4 +1,5 @@
 import re
+from collections import OrderedDict
 from typing import Dict, Any, List, Optional, Generator
 from app.core.privacy import PIIScrubber
 from app.core.llm import LocalLLMClient
@@ -28,9 +29,55 @@ class AgentRouter:
         self.vector_store = vector_store
         self.llm = llm_client
         self.event_db = EventDatabaseEngine(llm_client=llm_client)
+        # Keep only server-derived event context. Client supplied history is never trusted.
+        self._conversation_contexts = OrderedDict()
+
+    def clear_conversation(self, conversation_id: str) -> None:
+        self._conversation_contexts.pop(conversation_id, None)
+
+    @staticmethod
+    def _is_follow_up(query: str) -> bool:
+        return bool(re.match(
+            r"^\s*(?:(?:and|also)\b|(?:what|how)\s+about\b|"
+            r"(?:what|which|where|when|how\s+many|how\s+much)\b|"
+            r"(?:show|tell|give|check)\s+(?:me\s+)?(?:its|their|the|those|that|these|them)\b)",
+            query,
+            re.IGNORECASE,
+        ))
+
+    def process_conversation_query(self, user_query: str, conversation_id: str) -> Dict[str, Any]:
+        context = self._conversation_contexts.get(conversation_id, {})
+        event_name = context.get("event_name")
+        query_for_router = user_query
+        if event_name and self._is_follow_up(user_query):
+            # Do not override an explicitly named event in a follow-up.
+            known_event = self.event_db.find_event_name(user_query)
+            if not known_event:
+                query_for_router = f"{user_query} for {event_name}"
+
+        result = self.process_query(query_for_router)
+        records = result.get("records") or []
+        names = {str(row.get("event_name") or row.get("name") or "").strip() for row in records}
+        names.discard("")
+        is_event_query = any(str(table).lower() == "events" for table in result.get("tables_accessed", []))
+        if is_event_query and len(names) == 1:
+            context = {"event_name": next(iter(names))}
+            self._conversation_contexts[conversation_id] = context
+            self._conversation_contexts.move_to_end(conversation_id)
+            while len(self._conversation_contexts) > 1000:
+                self._conversation_contexts.popitem(last=False)
+        elif is_event_query and not self._is_follow_up(user_query):
+            # A new broad or ambiguous event question must not inherit a stale event.
+            self._conversation_contexts.pop(conversation_id, None)
+        return result
 
     def classify_intent(self, query: str) -> str:
         q_lower = query.strip().lower()
+
+        # Catalog-backed event-name matching lets natural titles route to SQL
+        # even when they contain none of the generic event keywords below.
+        if self.event_db.find_event_name(query):
+            return "EVENT_DB_QUERY"
 
         # Greetings & identity
         if q_lower in ["hi", "hello", "hey", "greetings", "help", "who are you", "what can you do"]:

@@ -161,6 +161,42 @@ class EventDatabaseEngine:
             return fallback_text
         return answer
 
+    def find_event_name(self, query: str) -> Optional[str]:
+        """Return a catalog event only when the query names it with a confident match."""
+        try:
+            result = DatabaseSecurityEngine.execute_safe_query(
+                self.db_path, "SELECT name FROM events"
+            )
+            events = [str(row["name"]) for row in result.get("data", [])]
+        except Exception:
+            return None
+
+        q = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
+        if not q:
+            return None
+        skip = {
+            "event", "events", "ticket", "tickets", "seat", "seats", "show", "tell", "about",
+            "available", "availability", "the", "and", "for", "what", "when", "where", "time",
+            "date", "link", "booking", "price", "details", "venue", "location", "capacity",
+            "international", "exhibition", "centre", "center", "garden", "academy", "2025", "2026",
+        }
+        q_tokens = set(q.split())
+        ranked = []
+        for name in events:
+            normalized = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+            if normalized and normalized in q:
+                return name
+            tokens = {token for token in normalized.split() if len(token) >= 3 and token not in skip}
+            matched = tokens & q_tokens
+            if len(matched) >= 2 or any(len(token) >= 7 for token in matched):
+                ranked.append((len(matched), name))
+        if not ranked:
+            return None
+        ranked.sort(reverse=True)
+        if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+            return None
+        return ranked[0][1]
+
     def execute_natural_query(self, user_query: str) -> Dict[str, Any]:
         """
         Main query entrypoint.
@@ -250,37 +286,8 @@ class EventDatabaseEngine:
         """Dynamically extracts event name, city, month, venue, and category filters from text."""
         filters = {}
 
-        # 1. Dynamic Event Name Filter from Database
-        try:
-            ev_res = DatabaseSecurityEngine.execute_safe_query(self.db_path, "SELECT event_id, name FROM events")
-            db_events = ev_res.get("data", [])
-        except Exception:
-            db_events = []
-
-        best_match_name = None
-        highest_score = 0
-        common_skip = {"expo", "summit", "festival", "gala", "world", "annual", "international", "2026", "2025", "the", "and", "for"}
-
-        for ev in db_events:
-            ev_name = ev["name"]
-            ev_lower = ev_name.lower()
-            
-            # Exact substring match
-            if ev_lower in q_lower:
-                best_match_name = ev_name
-                highest_score = 100
-                break
-            
-            # Substring match without common words
-            cleaned_ev_words = [w for w in re.findall(r'[a-zA-Z0-9]+', ev_lower) if w not in common_skip and len(w) >= 3]
-            score = 0
-            for w in cleaned_ev_words:
-                if w in q_lower:
-                    score += 2
-            
-            if score > highest_score and score >= 2:
-                highest_score = score
-                best_match_name = ev_name
+        # 1. Catalog-backed event name filter
+        best_match_name = self.find_event_name(q_lower)
 
         if best_match_name:
             safe_name = best_match_name.replace("'", "''")

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from uuid import UUID, uuid4
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -54,6 +55,10 @@ async def add_no_cache_headers(request, call_next):
 # Request schemas
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: Optional[UUID] = None
+
+class ConversationResetRequest(BaseModel):
+    conversation_id: UUID
 
 class ApprovalRequest(BaseModel):
     ticket_id: str
@@ -232,8 +237,14 @@ def get_database_schema() -> Dict[str, Any]:
 def chat_endpoint(request: ChatRequest) -> Dict[str, Any]:
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
-    result = router.process_query(request.message)
+    conversation_id = str(request.conversation_id or uuid4())
+    result = router.process_conversation_query(request.message, conversation_id)
     return result
+
+@app.post("/api/chat/reset")
+def reset_chat_endpoint(request: ConversationResetRequest) -> Dict[str, str]:
+    router.clear_conversation(str(request.conversation_id))
+    return {"status": "SUCCESS"}
 
 @app.get("/api/documents")
 def list_documents() -> List[Dict[str, Any]]:
