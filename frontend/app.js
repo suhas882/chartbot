@@ -2,9 +2,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
   const form = $("chatForm"), input = $("userInput"), send = $("sendBtn");
   const messages = $("messagesList"), welcome = $("welcomeHero"), eventList = $("eventList");
+  const conversation = $("conversation"), scrollLatestBtn = $("scrollLatestBtn");
   const sidebar = $("sidebar"), statusTitle = $("statusTitle"), modelLabel = $("activeModel");
   const demoSeatRoutes = {"ai-summit-2026-bengaluru":[1,1],"ai-summit-2026-hyderabad":[1,2],"neon-nights-jazz-mumbai":[2,3],"cyber-defense-expo-delhi":[3,4],"world-symphony-gala-chennai":[4,5],"culinary-wine-expo-goa":[5,6]};
   const escapeHTML = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  function isNearLatest() { return conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 96; }
+  function updateScrollControl() { scrollLatestBtn.classList.toggle("hidden", messages.childElementCount < 2 || isNearLatest()); }
+  function scrollConversationToLatest() { requestAnimationFrame(() => { conversation.scrollTo({ top: conversation.scrollHeight, behavior: "smooth" }); updateScrollControl(); }); }
+  conversation.addEventListener("scroll", updateScrollControl, { passive: true });
+  scrollLatestBtn.addEventListener("click", scrollConversationToLatest);
 
   function renderAnswer(text) {
     // Route demo-only ticket URLs into this prototype’s local seat view.
@@ -26,7 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const row = document.createElement("article"); row.className = `message ${role}-msg`;
     const avatar = role === "user" ? "Y" : "✳";
     row.innerHTML = `<div class="message-avatar">${avatar}</div><div class="message-main"><div class="message-label">${role === "user" ? "You" : "Chartbot"}</div><div class="message-body">${loading ? '<span class="typing"><i></i><i></i><i></i></span>' : role === "user" ? escapeHTML(text).replace(/\n/g,"<br>") : renderAnswer(text)}</div></div>`;
-    messages.appendChild(row); row.scrollIntoView({behavior:"smooth",block:"nearest"}); return row;
+    messages.appendChild(row); scrollConversationToLatest(); return row;
   }
   function newChat() { messages.replaceChildren(); welcome.classList.remove("hidden"); input.value=""; input.style.height="auto"; input.focus(); }
   $("clearChatBtn").addEventListener("click", newChat); $("clearTopBtn").addEventListener("click", newChat);
